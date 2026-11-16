@@ -49,7 +49,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.ccch1mneyyy.dsh_app"
+        // 独立版：和官方包不同 applicationId，可以并排安装，互不影响。
+        applicationId = "io.github.ccch1mneyyy.dsh_app.test"
         // java.nio.file (symlinks while unpacking the rootfs) needs API 26.
         minSdk = 26
         // Target 28 like Termux, so the API 29+ exec restriction on app-private
