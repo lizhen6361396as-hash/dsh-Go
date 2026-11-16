@@ -596,8 +596,10 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             topGuardBottom = systemTopBottom()
             val p = buildPill()
             // The beam's window first, so the control's windows come over it.
-            beam.attach(s(R.string.overlay_window_title), isDark(), ThemeAccent.notificationColor(service), captureHidden || passThrough)
-            if (!add(p.root, p.params)) { beam.detach(animated = false); return }
+            if (EDGE_BEAM_ON) {
+                beam.attach(s(R.string.overlay_window_title), isDark(), ThemeAccent.notificationColor(service), captureHidden || passThrough)
+            }
+            if (!add(p.root, p.params)) { if (EDGE_BEAM_ON) beam.detach(animated = false); return }
             pill = p
             ballShown = false
             fold.start(now())
@@ -667,6 +669,8 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
      * an injected stroke.
      */
     private fun syncBeam() {
+        // 不要屏幕四周那圈炫光：关掉以后一圈都不画（胶囊本身仍然表示 DSH 在看屏幕）。
+        if (!EDGE_BEAM_ON) return
         beam.set(on = pill != null && !stoppedNote && handoffCard == null, paused = paused)
         beam.setHidden(captureHidden || passThrough)
     }
@@ -1813,6 +1817,9 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     companion object {
         private const val TAG = "DshA11y"
         private const val ARM_MS = 600L
+
+        /** 屏幕四周那圈「正在被操作」的炫光色带（EdgeBeam）：不要，关掉。 */
+        private const val EDGE_BEAM_ON = false
 
         /** 通知横幅弹出时往下让出的高度（dp，从屏幕顶算起）：荣耀/carve 的横幅约 64 dp 高。 */
         private const val NOTICE_RESERVE_DP = 72
