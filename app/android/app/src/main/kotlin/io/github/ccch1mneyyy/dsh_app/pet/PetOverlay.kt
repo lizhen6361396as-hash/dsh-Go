@@ -778,10 +778,18 @@ internal object PetOverlay {
     /** Where the rest frame sits now: the window, less how far its frame reaches past rest. */
     private fun restPos(v: PetView, p: WindowManager.LayoutParams) = PetFrames.restOf(WindowPos(p.x, p.y), v.frame)
 
+    /** 宠物窗口外面再留一圈余量：有几帧会画到窗口边界外一点，留出这段就不会贴到屏幕边上被切。 */
+    private const val SAFE_DP = 24f
+
+    private fun petArea(): SafeArea = safeArea().let {
+        val m = if (::app.isInitialized) edge(app) + app.dp(SAFE_DP) else 80
+        SafeArea(it.screenW, it.screenH, it.left + m, it.top, it.right + m, it.bottom)
+    }
+
     private fun placeRest(v: PetView, p: WindowManager.LayoutParams, rest: WindowPos) {
         val at = PetFrames.windowAt(rest, v.frame)
         // 一开始就得在屏幕里：换过分辨率/字号、或者上次记住的位置在旧屏幕上，都不许停到屏幕外。
-        val safe = EdgeSnap.clampDrag(at.x, at.y, v.frame.width, v.frame.height, safeArea())
+        val safe = EdgeSnap.clampDrag(at.x, at.y, v.frame.width, v.frame.height, petArea())
         p.x = safe.x
         p.y = safe.y
     }
@@ -809,7 +817,7 @@ internal object PetOverlay {
         p.height = next.height
         placeRest(v, p, rest)
         // 不管何时都要在屏幕内: a frame that grew past the dock (a jump, a thought cloud) is kept whole.
-        EdgeSnap.clampDrag(p.x, p.y, p.width, p.height, safeArea()).let { p.x = it.x; p.y = it.y }
+        EdgeSnap.clampDrag(p.x, p.y, p.width, p.height, petArea()).let { p.x = it.x; p.y = it.y }
         update(v, p)
     }
 
