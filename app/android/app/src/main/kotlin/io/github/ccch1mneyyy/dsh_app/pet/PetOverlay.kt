@@ -778,6 +778,26 @@ internal object PetOverlay {
     /** Where the rest frame sits now: the window, less how far its frame reaches past rest. */
     private fun restPos(v: PetView, p: WindowManager.LayoutParams) = PetFrames.restOf(WindowPos(p.x, p.y), v.frame)
 
+    /**
+     * 按记住的停靠位置重新摆一次，不看现在的窗口参数——重启后旧参数可能是在旧屏幕/旧尺寸下算的，
+     * 一路沿用就会停在屏幕外。启动后隔几帧各调一次，等包和尺寸都就绪。
+     */
+    private fun reDock() {
+        val v = petView ?: return
+        val p = petParams ?: return
+        if (v.companionGeometry != null) return
+        val pos = EdgeSnap.position(dock, v.reach, safeArea(), edge(v.context))
+        placeRest(v, p, pos)
+        update(v, p)
+    }
+
+    /** 启动/换尺寸后多补几次位置：进程刚起来时帧和屏幕尺寸都可能还没就绪。 */
+    private fun scheduleRedock() {
+        for (delay in longArrayOf(300L, 1_000L, 2_500L)) {
+            main.postDelayed({ if (alive(petTicket)) reDock() }, delay)
+        }
+    }
+
     /** 宠物窗口外面再留一圈余量：有几帧会画到窗口边界外一点，留出这段就不会贴到屏幕边上被切。 */
     private const val SAFE_DP = 24f
 
@@ -806,8 +826,11 @@ internal object PetOverlay {
 
     private fun placeRest(v: PetView, p: WindowManager.LayoutParams, rest: WindowPos) {
         val at = PetFrames.windowAt(rest, v.frame)
+        // 刚启动时帧可能还没算出来（0×0），那时候按 reach 兜底，否则夹不住、会停在屏幕外。
+        val w = if (v.frame.width > 0) v.frame.width else v.reach.width
+        val h = if (v.frame.height > 0) v.frame.height else v.reach.height
         // 一开始就得在屏幕里：换过分辨率/字号、或者上次记住的位置在旧屏幕上，都不许停到屏幕外。
-        val safe = EdgeSnap.clampDrag(at.x, at.y, v.frame.width, v.frame.height, petArea())
+        val safe = EdgeSnap.clampDrag(at.x, at.y, w, h, petArea())
         p.x = safe.x
         p.y = safe.y
     }
@@ -917,6 +940,7 @@ internal object PetOverlay {
                 return false
             }
             if (want == OverlayHost.APPLICATION) lastAdd = AddResult.OK
+            scheduleRedock()
             if (companionEndpoint == null || companionRecovery.fallback) enter(view)
             drawStill()
             true
