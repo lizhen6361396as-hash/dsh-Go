@@ -163,6 +163,13 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private var topGuardBottom = 0
     private val guardRect = Rect()
 
+    /** 通知横幅出现的那几秒要多让出的高度（px）：系统横幅窗口是全屏的，读不到它画到哪，只能按高度让。 */
+    private var noticeBottom = 0
+    private val noticeTick = Runnable {
+        noticeBottom = 0
+        avoidObstacles()
+    }
+
     /** The capsule gliding to where it rests now: over (or back from) the keyboard or the confirm card, down for the card's room, to an anchor after a drag. */
     private var lift: ValueAnimator? = null
 
@@ -783,7 +790,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         val gap = dp(CapsulePlacement.GAP_DP)
         val base = CapsulePlacement.centreY(a, headerH, gap, obstacle, spot.fraction, cardH)
         // 顶部系统浮层（灵动岛 / 横幅）变大时，悬浮条跟着往下让开，收回去以后回原位。
-        val guard = topGuardBottom
+        val guard = maxOf(topGuardBottom, noticeBottom)
         return if (guard > a.top) maxOf(base, guard + gap + headerH / 2) else base
     }
 
@@ -803,8 +810,9 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
                 if (own != null && root.packageName?.toString() == own) continue
                 w.getBoundsInScreen(guardRect)
                 val r = guardRect
-                if (r.isEmpty || r.top > dp(4) || r.height() <= a.top) continue
-                if (r.height() >= a.screenH * 0.4f) continue
+                if (r.isEmpty || r.top > dp(4)) continue
+                // 只到状态栏里、或者干脆是全屏的窗口（通知横幅就是全屏窗口）都不算。
+                if (r.bottom <= a.top || r.bottom > a.screenH * 0.35f) continue
                 if (r.right < a.screenW / 2 || r.left > a.screenW / 2) continue
                 bottom = maxOf(bottom, r.bottom)
             }
@@ -911,6 +919,19 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             imeRect.top.takeIf { !imeRect.isEmpty }
         }
     }.getOrNull()
+
+    /**
+     * 通知横幅刚弹出来: 顶上会盖住胶囊，先往下让出一条横幅的高度，几秒后自己收回。
+     * 系统的横幅窗口在荣耀上登记成全屏，读不到真实高度，所以按经验高度让。
+     */
+    fun onNotificationShown() {
+        if (pill == null) return
+        val a = safeArea()
+        noticeBottom = a.top + dp(NOTICE_RESERVE_DP)
+        main.removeCallbacks(noticeTick)
+        main.postDelayed(noticeTick, NOTICE_HOLD_MS)
+        avoidObstacles()
+    }
 
     /** The service's windows changed: a keyboard may have come or gone, or a top panel grown. */
     fun onWindowsChanged() {
@@ -1792,6 +1813,11 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     companion object {
         private const val TAG = "DshA11y"
         private const val ARM_MS = 600L
+
+        /** 通知横幅弹出时往下让出的高度（dp，从屏幕顶算起）：荣耀/carve 的横幅约 64 dp 高。 */
+        private const val NOTICE_RESERVE_DP = 72
+        /** 让位保持多久（ms）：横幅显示约 3–4 s，留足。 */
+        private const val NOTICE_HOLD_MS = 4500L
 
         /** 吸附在最顶端居中：anchor 固定中间，高度比例 0（状态栏下 12 dp），不再自由拖动。 */
         private val PINNED_SPOT = CapsuleSpot(CapsuleAnchor.CENTRE, 0f, null)
