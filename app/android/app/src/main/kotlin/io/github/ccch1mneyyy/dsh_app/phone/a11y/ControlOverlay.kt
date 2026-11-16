@@ -864,11 +864,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         card.addView(ScrollView(service).apply { addView(body); isVerticalScrollBarEnabled = false },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         card.addView(TextView(service).apply {
-            text = if (request.offerTaskWaiver) {
-                AppStrings.get(service, R.string.overlay_waiver_hint)
-            } else {
-                AppStrings.get(service, R.string.overlay_timeout_hint)
-            }
+            text = AppStrings.get(service, R.string.overlay_timeout_hint)
             textSize = 12f; setTextColor(c.faint); setLineSpacing(0f, 1.2f); setPadding(0, 0, 0, dp(10))
         })
 
@@ -878,7 +874,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         // 本任务免确认: the main choice waives the rest of the task. Otherwise, on the first action
         // in an app, the main choice allows that app for the rest of the task so later steps there
         // don't ask again. "Only this step" stays available as the quieter option either way.
-        val wide = request.visualScope != null || request.offerTaskWaiver || request.firstInApp
+        val wide = request.visualScope != null || request.allowRound || request.firstInApp
         if (request.visualScope != null) {
             val visual = GuardedButton(service, armedAt).apply {
                 text = AppStrings.get(service, R.string.phone_prompt_allow_visual)
@@ -887,22 +883,15 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             }
             guarded += visual
             card.addView(visual, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(8) })
-        } else if (request.offerTaskWaiver) {
-            val all4task = GuardedButton(service, armedAt).apply {
-                text = AppStrings.get(service, R.string.overlay_allow_remaining)
-                style(this, c.accent, c.onAccent, c)
-                setOnClickListener { decide(Decision.ALLOW_ALL_FOR_TASK) }
-            }
-            guarded += all4task
-            card.addView(all4task, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(8) })
-        } else if (request.firstInApp) {
-            val app4task = GuardedButton(service, armedAt).apply {
-                text = if (app != null) AppStrings.get(service, R.string.overlay_allow_app_task, app) else AppStrings.get(service, R.string.overlay_allow_this_app_task)
+        } else if (request.allowRound) {
+            // 本轮允许：同一个应用本轮的同类动作不再询问（1.1.0 用 ALLOW_APP_FOR_TASK 表示）。
+            val round = GuardedButton(service, armedAt).apply {
+                text = if (app != null) AppStrings.get(service, R.string.overlay_allow_round) else AppStrings.get(service, R.string.overlay_allow_round)
                 style(this, c.accent, c.onAccent, c)
                 setOnClickListener { decide(Decision.ALLOW_APP_FOR_TASK) }
             }
-            guarded += app4task
-            card.addView(app4task, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(8) })
+            guarded += round
+            card.addView(round, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(8) })
         }
         val row = LinearLayout(service).apply { gravity = Gravity.CENTER_VERTICAL }
         row.addView(textButton(AppStrings.get(service, R.string.overlay_stop), c.danger, c) { decide(Decision.STOP) })
@@ -910,7 +899,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         row.addView(textButton(AppStrings.get(service, R.string.overlay_decline), c.ink, c) { decide(Decision.DENY) }.apply { background = outlined(c) },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(46)).apply { marginEnd = dp(8) })
         val allow = GuardedButton(service, armedAt).apply {
-            text = if (wide) AppStrings.get(service, R.string.overlay_allow_step) else AppStrings.get(service, R.string.overlay_allow_once)
+            text = if (wide) AppStrings.get(service, R.string.overlay_allow_round) else AppStrings.get(service, R.string.overlay_allow_once)
             if (wide) style(this, c.accentSoft, c.onAccentSoft, c) else style(this, c.accent, c.onAccent, c)
             setOnClickListener { decide(Decision.ALLOW_ONCE) }
         }
