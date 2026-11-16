@@ -798,7 +798,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         return runCatching {
             var bottom = 0
             for (w in service.windows) {
-                if (!w.isVisible) continue
                 if (w.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
                 val root = w.root ?: continue
                 if (own != null && root.packageName?.toString() == own) continue
