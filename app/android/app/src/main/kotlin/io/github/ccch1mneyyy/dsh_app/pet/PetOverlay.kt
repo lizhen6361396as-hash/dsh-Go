@@ -530,7 +530,7 @@ internal object PetOverlay {
             // 12+ treating this invisible application overlay as an occluder.
             p.alpha = 0f
             p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-            placeRest(v, p, EdgeSnap.position(dock, v.reach, area, edge(v.context)))
+            placeRest(v, p, EdgeSnap.position(dock, v.restBoxOnly(), area, edge(v.context)))
             update(v, p)
             renderer.state(machine.last?.state ?: PetPack.IDLE, machine.last?.reduceMotion == true)
             renderer.freeze(dimmed)
@@ -556,7 +556,7 @@ internal object PetOverlay {
         p.alpha = 1f
         p.flags = p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         p.width = v.frame.width; p.height = v.frame.height
-        placeRest(v, p, EdgeSnap.position(dock, v.reach, safeArea(), edge(v.context)))
+        placeRest(v, p, EdgeSnap.position(dock, v.restBoxOnly(), safeArea(), edge(v.context)))
         update(v, p)
         retarget()
         drawStill()
@@ -786,7 +786,7 @@ internal object PetOverlay {
         val v = petView ?: return
         val p = petParams ?: return
         if (v.companionGeometry != null) return
-        val pos = EdgeSnap.position(dock, v.reach, safeArea(), edge(v.context))
+        val pos = EdgeSnap.position(dock, v.restBoxOnly(), safeArea(), edge(v.context))
         placeRest(v, p, pos)
         update(v, p)
     }
@@ -899,6 +899,12 @@ internal object PetOverlay {
 
     private fun edge(ctx: Context) = ctx.dp(EDGE_DP)
 
+    /**
+     * 停靠时只按静止帧算，宠物才真的贴边；动画临时撑大的帧由 [fitFrame] 自己夹回屏幕内，
+     * 不让它把静止位置整体往里推（那会留出一条很宽的缝）。
+     */
+    private fun PetView.restBoxOnly(): FramePx = frame
+
     /** The pet window, on the right host; false when it couldn't be added. */
     private fun attachPet(): Boolean {
         val want = overlayHost()
@@ -924,7 +930,7 @@ internal object PetOverlay {
             view.contentDescription = loaded?.pack?.name ?: AppStrings.get(app, R.string.pet_label)
             dimmed = false
             systemShown = true
-            val pos = EdgeSnap.position(dock, view.reach, safeArea(), edge(ctx))
+            val pos = EdgeSnap.position(dock, view.restBoxOnly(), safeArea(), edge(ctx))
             val hardware = if (companionEndpoint != null && !companionRecovery.fallback)
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED else 0
             val params = baseParams(view.pixelWidth, view.pixelHeight, hardware).apply { x = pos.x; y = pos.y }
@@ -1198,7 +1204,7 @@ internal object PetOverlay {
             val drop = dropAt ?: restPos(v, p)
             dock = EdgeSnap.dockFor(drop, v.pixelWidth, v.reach, area, edge(v.context), velocityX)
             prefs.edit().putString(K_SIDE, if (dock.side == Side.LEFT) "left" else "right").putFloat(K_Y, dock.yFraction).apply()
-            slide(v, p, EdgeSnap.position(dock, v.reach, area, edge(v.context))) { evaluate() }
+            slide(v, p, EdgeSnap.position(dock, v.restBoxOnly(), area, edge(v.context))) { evaluate() }
         }
 
         override fun onDragCancel() {
@@ -1209,7 +1215,7 @@ internal object PetOverlay {
             redraw()
             val v = petView ?: return
             val p = petParams ?: return
-            slide(v, p, EdgeSnap.position(dock, v.reach, safeArea(), edge(v.context))) { evaluate() }
+            slide(v, p, EdgeSnap.position(dock, v.restBoxOnly(), safeArea(), edge(v.context))) { evaluate() }
         }
 
         override fun onPoke(leftHalf: Boolean, x: Float, y: Float) {
@@ -1788,7 +1794,7 @@ internal object PetOverlay {
         val gap = ctx.dp(8f)
         val margin = edge(ctx)
         val at = if (pv.companionGeometry != null) petParams?.let { restPos(pv, it) } ?: return
-            else EdgeSnap.position(dock, pv.reach, area, margin)
+            else EdgeSnap.position(dock, pv.restBoxOnly(), area, margin)
         val body = f.body.at(at)
         val pet = ScreenRect(at.x + pv.reach.left, body.top, at.x + pv.reach.right, body.bottom)
         val w = AskPlace.width(pet, dock.side, area, gap, margin, ctx.dp(ASK_MIN_DP), ctx.dp(ASK_MAX_DP))
