@@ -112,8 +112,6 @@ class PhoneA11yService : AccessibilityService() {
         clock.tick(event?.packageName)
         // A keyboard coming or going moves the control clear of it.
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) overlay?.onWindowsChanged()
-        // 通知横幅弹出来会盖住胶囊：让它先往下让一条，几秒后回去。
-        if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) overlay?.onNotificationShown()
         // Window changes retire both coordinates and screenshot authorization. Only an identified
         // window of this service's controls is exempt; switching to DSH itself is still a transition.
         if (event != null && invalidatesVisual(event.eventType) {

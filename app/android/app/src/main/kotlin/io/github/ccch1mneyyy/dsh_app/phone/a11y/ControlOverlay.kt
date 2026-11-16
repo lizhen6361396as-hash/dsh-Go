@@ -159,36 +159,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private var imeTop: Int? = null
     private val imeRect = Rect()
 
-    /** The bottom of a top system panel over the middle (灵动岛 / 横幅), px; 0 when none shows. */
-    private var topGuardBottom = 0
-    private val guardRect = Rect()
-
-    /** 顶上正压着的通知横幅 / 灵动岛占到哪（px）；0 = 没有，胶囊回到顶端。 */
-    private var noticeBottom = 0
-    private var noticePolls = 0
-
-    /** 横幅收没收：每 250 ms 量一次顶上到底被占到哪，量到没有了就回去，不按时间猜。 */
-    private val noticeTick = object : Runnable {
-        override fun run() {
-            if (pill == null) { noticeBottom = 0; return }
-            val a = safeArea()
-            val bottom = topLayerBottom()
-            noticePolls++
-            val top = if (bottom > a.top) bottom else 0
-            // 兜底：系统一直不报变化时，最多量 48 次（12 s）就回去。
-            if (top == 0 || noticePolls >= 48) {
-                noticeBottom = 0
-                avoidObstacles()
-                return
-            }
-            if (top != noticeBottom) {
-                noticeBottom = top
-                avoidObstacles()
-            }
-            main.postDelayed(this, NOTICE_POLL_MS)
-        }
-    }
-
     /** The capsule gliding to where it rests now: over (or back from) the keyboard or the confirm card, down for the card's room, to an anchor after a drag. */
     private var lift: ValueAnimator? = null
 
@@ -222,8 +192,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     }
 
     init {
-        // 吸附在最顶端居中：不再恢复上次拖到的位置，旧的自由拖动坐标也不再用（和 v15 一样的手感）。
-        spot = PINNED_SPOT
+        spot = OverlayPrefs.spot(overlayPrefs)
         fold.setAutoFold(OverlayPrefs.from(overlayPrefs).autoFold, SystemClock.uptimeMillis())
         overlayPrefs.registerOnSharedPreferenceChangeListener(prefsListener)
     }
@@ -612,7 +581,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         if (pill == null) {
             darkBuilt = isDark()
             imeTop = imeWindowTop()
-            topGuardBottom = systemTopBottom()
             val p = buildPill()
             // The beam's window first, so the control's windows come over it.
             if (EDGE_BEAM_ON) {
@@ -808,45 +776,14 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     }
 
     /** The capsule's centre y with nothing in the way: where a ball the person never moved rests too. */
-    private fun capsuleCentre(a: SafeArea = safeArea(), obstacle: Int? = null, cardH: Int = 0): Int {
-        val headerH = dp(CapsuleMetrics.HEIGHT_DP)
-        val gap = dp(CapsulePlacement.GAP_DP)
-        val base = CapsulePlacement.centreY(a, headerH, gap, obstacle, spot.fraction, cardH)
-        // 顶部系统浮层（灵动岛 / 横幅）变大时，悬浮条跟着往下让开，收回去以后回原位。
-        val guard = maxOf(topGuardBottom, noticeBottom)
-        return if (guard > a.top) maxOf(base, guard + gap + headerH / 2) else base
-    }
-
-    /**
-     * The bottom of a top-anchored system panel over the screen's middle — a phone's 灵动岛 or a
-     * heads-up card — in px; 0 when none shows. Only the ones that reach below the status bar matter
-     * (a plain status bar does not): the capsule floats down under them instead of being covered.
-     */
-    private fun systemTopBottom(): Int {
-        val a = safeArea()
-        val own = service.packageName?.toString()
-        return runCatching {
-            var bottom = 0
-            for (w in service.windows) {
-                if (w.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
-                val root = w.root ?: continue
-                if (own != null && root.packageName?.toString() == own) continue
-                w.getBoundsInScreen(guardRect)
-                val r = guardRect
-                if (r.isEmpty || r.top > dp(4)) continue
-                // 只到状态栏里、或者干脆是全屏的窗口（通知横幅就是全屏窗口）都不算。
-                if (r.bottom <= a.top || r.bottom > a.screenH * 0.35f) continue
-                if (r.right < a.screenW / 2 || r.left > a.screenW / 2) continue
-                bottom = maxOf(bottom, r.bottom)
-            }
-            bottom
-        }.getOrDefault(0)
-    }
+    private fun capsuleCentre(a: SafeArea = safeArea(), obstacle: Int? = null, cardH: Int = 0) =
+        CapsulePlacement.centreY(a, dp(CapsuleMetrics.HEIGHT_DP), dp(CapsulePlacement.GAP_DP), obstacle, spot.fraction, cardH)
 
     /** The capsule's window offset clear of what is in the way, low enough for the open card; the card's room above it follows. */
     private fun capsuleY(p: OverlayCapsule, a: SafeArea): Int {
         val headerH = dp(CapsuleMetrics.HEIGHT_DP)
-        val centre = capsuleCentre(a, obstacleTop(), if (fold.expanded) p.naturalCardHeight() else 0)
+        // 打开卡片时胶囊原地不动（以前会为了给卡片腾高度而整体下移，看起来像自己在跑）。
+        val centre = capsuleCentre(a, obstacleTop(), 0)
         p.maxCardHeight = CapsulePlacement.cardRoom(a, centre, headerH, dp(CapsulePlacement.GAP_DP))
         return CapsulePlacement.windowY(a.screenH, centre, headerH, p.padBottom)
     }
@@ -855,17 +792,35 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private fun capsuleX(p: OverlayCapsule): Int {
         val a = safeArea()
         val left = dragAt?.x
-            ?: CapsulePlacement.capsuleLeft(CapsuleAnchor.CENTRE, a, p.capsuleWidth, dp(CapsulePlacement.EDGE_DP))
+            ?: spot.free?.let { CapsulePlacement.freeLeft(a, p.capsuleWidth, it) }
+            ?: CapsulePlacement.capsuleLeft(p.anchor, a, p.capsuleWidth, dp(CapsulePlacement.EDGE_DP))
         return CapsulePlacement.windowX(left, p.padX, p.steadyLeft())
     }
 
-    /** The side the steady capsule grows from: always the middle (吸附在最顶端居中). */
-    private fun steadyAnchor(): CapsuleAnchor = CapsuleAnchor.CENTRE
+    /** The side the steady capsule grows from: its anchor, or the nearer side when it was let go anywhere. */
+    private fun steadyAnchor(): CapsuleAnchor {
+        val free = spot.free ?: return spot.anchor
+        return if (free < 0.5f) CapsuleAnchor.LEFT else CapsuleAnchor.RIGHT
+    }
 
     // ---- dragging the capsule -------------------------------------------------------------------
 
-    /** 固定在最顶端居中：胶囊不再跟手拖动（收成小球点胶囊左端的标记）。 */
-    private fun startDrag() = Unit
+    /** The header is being dragged: the card goes back to the capsule first, nothing folds meanwhile. */
+    private fun startDrag() {
+        val p = pill ?: return
+        lift?.cancel()
+        lift = null
+        main.removeCallbacks(foldTick)
+        if (fold.expanded) {
+            endEditing()
+            if (fold.collapse(now())) p.collapse(animationsOn())
+        }
+        val a = safeArea()
+        val headerH = dp(CapsuleMetrics.HEIGHT_DP)
+        val from = WindowPos(p.params.x + p.padX + p.steadyLeft(), a.screenH - p.params.y - p.padBottom - headerH / 2)
+        dragFrom = from
+        dragAt = from
+    }
 
     /** Follows the finger: anywhere across (past a side too), up and down within the bars. */
     private fun dragTo(dx: Float, dy: Float) {
@@ -899,7 +854,8 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         }
         // 自由拖动: kept a capsule, it stays exactly where it was let go (still whole on screen);
         // thrown out past a side it folds into the ball there, as before.
-        spot = PINNED_SPOT
+        val free = if (side == null) CapsulePlacement.shareFor(a, p.capsuleWidth, at.x) else null
+        spot = CapsuleSpot(anchor, CapsulePlacement.fractionFor(a, at.y, headerH, dp(CapsulePlacement.GAP_DP)), free)
         OverlayPrefs.saveSpot(overlayPrefs, spot)
         fold.touch(now())
         if (side != null && !stoppedNote) {
@@ -920,7 +876,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     /** The screen reader's 移到左侧 / 中间 / 右侧: the same anchors, at the same height. */
     private fun moveTo(anchor: CapsuleAnchor) {
         val p = pill ?: return
-        spot = PINNED_SPOT
+        spot = spot.copy(anchor = anchor, free = null)
         OverlayPrefs.saveSpot(overlayPrefs, spot)
         p.anchor = steadyAnchor()
         avoidObstacles()
@@ -943,52 +899,12 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         }
     }.getOrNull()
 
-    /**
-     * 通知横幅刚弹出来: 顶上会盖住胶囊，先往下让出一条横幅的高度，几秒后自己收回。
-     * 系统的横幅窗口在荣耀上登记成全屏，读不到真实高度，所以按经验高度让。
-     */
-    fun onNotificationShown() {
-        if (pill == null) return
-        val a = safeArea()
-        // 先按一条横幅的高度让开（不等测量，免得第一帧就被压住），随后跟着真实位置走。
-        noticeBottom = maxOf(noticeBottom, a.top + dp(NOTICE_RESERVE_DP))
-        noticePolls = 0
-        main.removeCallbacks(noticeTick)
-        main.postDelayed(noticeTick, NOTICE_POLL_MS)
-        avoidObstacles()
-    }
-
-    /**
-     * 顶上现在被系统浮层占到的底边（px），0 = 没有：窗口列表 + 本窗口的 insets 两条路取较大。
-     * 通知横幅和灵动岛都是系统自己画的，荣耀把它们的窗口登记成屏幕大小，只能靠这两条凑。
-     */
-    private fun topLayerBottom(): Int {
-        val a = safeArea()
-        var bottom = systemTopBottom()
-        if (Build.VERSION.SDK_INT >= 30) {
-            val root = pill?.root
-            val ins = root?.takeIf { it.isAttachedToWindow }?.rootWindowInsets
-            if (ins != null) {
-                runCatching {
-                    val t = maxOf(
-                        ins.getInsets(WindowInsets.Type.systemOverlays()).top,
-                        ins.getInsets(WindowInsets.Type.statusBars()).top,
-                    )
-                    if (t > bottom) bottom = t
-                }
-            }
-        }
-        return if (bottom > a.top) bottom else 0
-    }
-
-    /** The service's windows changed: a keyboard may have come or gone, or a top panel grown. */
+    /** The service's windows changed: a keyboard may have come or gone. */
     fun onWindowsChanged() {
         if (pill == null) return
         val top = imeWindowTop()
-        val guard = systemTopBottom()
-        if (top == imeTop && guard == topGuardBottom) return
+        if (top == imeTop) return
         imeTop = top
-        topGuardBottom = guard
         avoidObstacles()
     }
 
@@ -1087,8 +1003,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         } else if (fold.expand(now())) {
             applyIdle(animated = true)
             renderPill(animated = false)
-            // A capsule dragged up high moves down while the card is open, so the card fits above it.
-            avoidObstacles()
+            // 卡片在原地往上长；放不下就自己滚，胶囊不动。
             p.expand(animationsOn())
         }
         scheduleFold()
@@ -1864,14 +1779,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
 
         /** 屏幕四周那圈「正在被操作」的炫光色带（EdgeBeam）：不要，关掉。 */
         private const val EDGE_BEAM_ON = false
-
-        /** 横幅还没量出来时先按这个高度让开（dp，从屏幕顶算起）。 */
-        private const val NOTICE_RESERVE_DP = 72
-        /** 量横幅位置的间隔（ms）：够快看出它缩回去了，又不费电。 */
-        private const val NOTICE_POLL_MS = 250L
-
-        /** 吸附在最顶端居中：anchor 固定中间，高度比例 0（状态栏下 12 dp），不再自由拖动。 */
-        private val PINNED_SPOT = CapsuleSpot(CapsuleAnchor.CENTRE, 0f, null)
 
         /** The app's page link for 解除限制 (lib/ui/settings/index/spots.dart). */
         private const val UNLOCKS_LINK = "dshgo://open/phone-unlocks"
