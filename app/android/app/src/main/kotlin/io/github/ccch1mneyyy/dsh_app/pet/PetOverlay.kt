@@ -782,7 +782,7 @@ internal object PetOverlay {
     private const val SAFE_DP = 24f
 
     private fun petArea(): SafeArea = safeArea().let {
-        val m = if (::app.isInitialized) edge(app) + app.dp(SAFE_DP) else 80
+        val m = if (::app.isInitialized) edge(app) else 20
         SafeArea(it.screenW, it.screenH, it.left + m, it.top, it.right + m, it.bottom)
     }
 
@@ -809,7 +809,7 @@ internal object PetOverlay {
         val l = loaded ?: return
         if (!alive(petTicket)) return
         // 窗口必须装得下正在画的那一帧：只按“静止帧”给大小，边上会被窗口自己裁掉（看起来像跑出屏幕）。
-        val next = l.frames.frameFor(v.shown, dragging).union(l.frames.art(v.shown))
+        val next = l.frames.frameFor(v.shown, dragging).union(v.artFrame() ?: l.frames.art(v.shown))
         if (next == v.frame) return
         val rest = restPos(v, p)
         v.setFrame(next)
