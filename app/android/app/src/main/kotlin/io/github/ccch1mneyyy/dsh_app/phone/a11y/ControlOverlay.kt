@@ -163,11 +163,30 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private var topGuardBottom = 0
     private val guardRect = Rect()
 
-    /** 通知横幅出现的那几秒要多让出的高度（px）：系统横幅窗口是全屏的，读不到它画到哪，只能按高度让。 */
+    /** 顶上正压着的通知横幅 / 灵动岛占到哪（px）；0 = 没有，胶囊回到顶端。 */
     private var noticeBottom = 0
-    private val noticeTick = Runnable {
-        noticeBottom = 0
-        avoidObstacles()
+    private var noticePolls = 0
+
+    /** 横幅收没收：每 250 ms 量一次顶上到底被占到哪，量到没有了就回去，不按时间猜。 */
+    private val noticeTick = object : Runnable {
+        override fun run() {
+            if (pill == null) { noticeBottom = 0; return }
+            val a = safeArea()
+            val bottom = topLayerBottom()
+            noticePolls++
+            val top = if (bottom > a.top) bottom else 0
+            // 兜底：系统一直不报变化时，最多量 48 次（12 s）就回去。
+            if (top == 0 || noticePolls >= 48) {
+                noticeBottom = 0
+                avoidObstacles()
+                return
+            }
+            if (top != noticeBottom) {
+                noticeBottom = top
+                avoidObstacles()
+            }
+            main.postDelayed(this, NOTICE_POLL_MS)
+        }
     }
 
     /** The capsule gliding to where it rests now: over (or back from) the keyboard or the confirm card, down for the card's room, to an anchor after a drag. */
@@ -931,10 +950,35 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     fun onNotificationShown() {
         if (pill == null) return
         val a = safeArea()
-        noticeBottom = a.top + dp(NOTICE_RESERVE_DP)
+        // 先按一条横幅的高度让开（不等测量，免得第一帧就被压住），随后跟着真实位置走。
+        noticeBottom = maxOf(noticeBottom, a.top + dp(NOTICE_RESERVE_DP))
+        noticePolls = 0
         main.removeCallbacks(noticeTick)
-        main.postDelayed(noticeTick, NOTICE_HOLD_MS)
+        main.postDelayed(noticeTick, NOTICE_POLL_MS)
         avoidObstacles()
+    }
+
+    /**
+     * 顶上现在被系统浮层占到的底边（px），0 = 没有：窗口列表 + 本窗口的 insets 两条路取较大。
+     * 通知横幅和灵动岛都是系统自己画的，荣耀把它们的窗口登记成屏幕大小，只能靠这两条凑。
+     */
+    private fun topLayerBottom(): Int {
+        val a = safeArea()
+        var bottom = systemTopBottom()
+        if (Build.VERSION.SDK_INT >= 30) {
+            val root = pill?.root
+            val ins = root?.takeIf { it.isAttachedToWindow }?.rootWindowInsets
+            if (ins != null) {
+                runCatching {
+                    val t = maxOf(
+                        ins.getInsets(WindowInsets.Type.systemOverlays()).top,
+                        ins.getInsets(WindowInsets.Type.statusBars()).top,
+                    )
+                    if (t > bottom) bottom = t
+                }
+            }
+        }
+        return if (bottom > a.top) bottom else 0
     }
 
     /** The service's windows changed: a keyboard may have come or gone, or a top panel grown. */
@@ -1821,10 +1865,10 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         /** 屏幕四周那圈「正在被操作」的炫光色带（EdgeBeam）：不要，关掉。 */
         private const val EDGE_BEAM_ON = false
 
-        /** 通知横幅弹出时往下让出的高度（dp，从屏幕顶算起）：荣耀/carve 的横幅约 64 dp 高。 */
+        /** 横幅还没量出来时先按这个高度让开（dp，从屏幕顶算起）。 */
         private const val NOTICE_RESERVE_DP = 72
-        /** 让位保持多久（ms）：横幅显示约 3–4 s，留足。 */
-        private const val NOTICE_HOLD_MS = 4500L
+        /** 量横幅位置的间隔（ms）：够快看出它缩回去了，又不费电。 */
+        private const val NOTICE_POLL_MS = 250L
 
         /** 吸附在最顶端居中：anchor 固定中间，高度比例 0（状态栏下 12 dp），不再自由拖动。 */
         private val PINNED_SPOT = CapsuleSpot(CapsuleAnchor.CENTRE, 0f, null)
