@@ -626,8 +626,10 @@ internal object PetOverlay {
         loadingKey = key
         val request = ++loadRequest
         val density = app.resources.displayMetrics.density
+        // 不许出屏: the screen at load time, so a 自定义 size bigger than the phone is cut down to it.
+        val area = safeArea()
         worker.execute {
-            val l = sprites.load(id, worker) { pack -> pack.screenScale(size, density) }
+            val l = sprites.load(id, worker) { pack -> fitScale(pack, pack.screenScale(size, density), area) }
             l?.warmResident()
             main.post {
                 if (request != loadRequest || loadingKey != key || packKey(machine.last) != key) {
@@ -1041,6 +1043,21 @@ internal object PetOverlay {
     }
 
     /** The screen minus status / navigation bars and the cutout. */
+    /**
+     * 宠物不许出屏: [pack]'s scale, cut down when the picture it may show would not fit the screen —
+     * a 自定义 size can ask for a pet wider or taller than the phone. The pet shrinks whole instead
+     * of hanging off an edge; when it fits already, the size is exactly what was asked for.
+     */
+    private fun fitScale(pack: PetPack, scale: Float, area: SafeArea): Float {
+        val roomW = (area.screenW - area.left - area.right).toFloat()
+        val roomH = (area.screenH - area.top - area.bottom).toFloat()
+        if (roomW <= 0f || roomH <= 0f) return scale
+        val box = pack.unionBox(pack.usedAnimations()).union(pack.windowBox())
+        if (box.w <= 0f || box.h <= 0f) return scale
+        val fit = minOf(roomW * 0.96f / box.w, roomH * 0.85f / box.h)
+        return minOf(scale, fit)
+    }
+
     private fun safeArea(): SafeArea {
         val w = wm ?: appWindowContext().getSystemService(WindowManager::class.java)
         if (Build.VERSION.SDK_INT >= 30) {
