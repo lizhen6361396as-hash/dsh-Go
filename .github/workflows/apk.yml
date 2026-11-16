@@ -55,6 +55,25 @@ jobs:
             "$RUNNER_TEMP/dshgo.keystore" "$STORE_PASS" "$KEY_ALIAS" "$KEY_PASS" > key.properties
           chmod 600 key.properties
 
+      # 本机引擎的 Linux 运行时是 runtime/build-runtime.sh 的产物，不进仓库；
+      # 这里从同版本官方包里取出（assets/runtime + 4 个 proot 相关 .so），
+      # 否则编出来的 APK 只有 70MB、没有本机引擎。
+      - name: 取出官方运行时
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/official.apk \
+            https://github.com/ccch1mneyyy/dsh-Go/releases/download/v1.1.0/dsh-go-1.1.0-arm64.apk
+          unzip -q /tmp/official.apk -d /tmp/official \
+            'assets/runtime/*' \
+            'lib/arm64-v8a/libproot.so' \
+            'lib/arm64-v8a/libproot-loader.so' \
+            'lib/arm64-v8a/libtalloc.so' \
+            'lib/arm64-v8a/libandroid-shmem.so'
+          mkdir -p runtime/out/arm64-v8a/assets runtime/out/arm64-v8a/jniLibs/arm64-v8a
+          cp -a /tmp/official/assets/runtime runtime/out/arm64-v8a/assets/
+          cp -a /tmp/official/lib/arm64-v8a/*.so runtime/out/arm64-v8a/jniLibs/arm64-v8a/
+          du -sh runtime/out/arm64-v8a/assets/runtime runtime/out/arm64-v8a/jniLibs/arm64-v8a
+
       - name: 编译
         working-directory: app
         run: flutter build apk --release --flavor arm64 --target-platform android-arm64
