@@ -97,6 +97,8 @@ internal object PetOverlay {
     private const val K_Y = "dockY"
     private const val EDGE_DP = 8f
     private const val POLL_MS = 2_000L
+    /** 宠物位置的硬兜底间隔：多久强制夹一次屏幕边界。 */
+    private const val CLAMP_MS = 1_200L
     private const val OPEN_CHECK_MS = 1_500L
     private const val MENU_MS = 8_000L
     private const val TARGET_DP = 56f
@@ -795,6 +797,30 @@ internal object PetOverlay {
     private fun scheduleRedock() {
         for (delay in longArrayOf(300L, 1_000L, 2_500L)) {
             main.postDelayed({ if (alive(petTicket)) reDock() }, delay)
+        }
+        main.removeCallbacks(clampTick)
+        main.postDelayed(clampTick, CLAMP_MS)
+    }
+
+    /**
+     * 硬兜底：只要宠物窗口在，就每隔一会儿把它按屏幕边界夹一次——不管前面哪一步算错了，
+     * 它都不会一直留在屏幕外。拖动中不干预，免得和手指打架。
+     */
+    private val clampTick = object : Runnable {
+        override fun run() {
+            val v = petView
+            val p = petParams
+            if (v != null && p != null && dragStart == null && v.companionGeometry == null) {
+                val area = petArea()
+                val x = p.x.coerceIn(area.left, maxOf(area.left, area.screenW - area.right - p.width))
+                val y = p.y.coerceIn(area.top, maxOf(area.top, area.screenH - area.bottom - p.height))
+                if (x != p.x || y != p.y) {
+                    p.x = x
+                    p.y = y
+                    update(v, p)
+                }
+            }
+            if (petView != null) main.postDelayed(this, CLAMP_MS)
         }
     }
 
