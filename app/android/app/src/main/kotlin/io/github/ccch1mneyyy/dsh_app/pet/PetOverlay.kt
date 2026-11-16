@@ -939,7 +939,33 @@ internal object PetOverlay {
     private fun update(v: View, p: WindowManager.LayoutParams) {
         if (!alive(windowTickets[v])) return
         try { wm?.updateViewLayout(v, p) } catch (e: Exception) { Log.w(TAG, "overlay update failed", e) }
+        traceGeometry(v, p)
     }
+
+    /** 临时诊断：把宠物窗口和它认为的屏幕尺寸写到 /sdcard/Download/DSH-Go/pet-geom.log。 */
+    private fun traceGeometry(v: View, p: WindowManager.LayoutParams) {
+        val now = System.currentTimeMillis()
+        if (now - lastTrace < 1500) return
+        lastTrace = now
+        runCatching {
+            val area = safeArea()
+            val line = "t=$now area=${area.screenW}x${area.screenH} " +
+                "in=${area.left},${area.top},${area.right},${area.bottom} " +
+                "win=${p.width}x${p.height}@${p.x},${p.y} dock=${dock.side}/${dock.yFraction} " +
+                "frame=${v.widthOfFrameOrMinus1()} scale=${loaded?.screenScale}\n"
+            val dir = java.io.File("/sdcard/Download/DSH-Go")
+            dir.mkdirs()
+            java.io.File(dir, "pet-geom.log").appendText(line)
+        }
+    }
+
+    private fun View.widthOfFrameOrMinus1(): String = try {
+        val v = this as PetView
+        "${v.frame.width}x${v.frame.height}"
+    } catch (_: Throwable) { "?" }
+
+    @Volatile
+    private var lastTrace = 0L
 
     private fun remove(v: View) {
         val ticket = windowTickets.remove(v)
