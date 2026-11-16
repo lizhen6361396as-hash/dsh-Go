@@ -1,10 +1,7 @@
-// SPDX-FileCopyrightText: 2026 CikeSeven
-// SPDX-License-Identifier: MIT
-// See THIRD_PARTY_NOTICES.md.
-// Local changes: a status control in the lower middle in three forms (ball, capsule, card) on one
-// morphing surface; a beam round the screen's edge while it shows; separate confirm and handoff
-// cards; buttons that refuse injected or obscured touches; pass-through and hide hooks for the
-// Actuator and screenshots; blocking UserGate calls.
+// Portions derived from Phase (https://github.com/CikeSeven/phase), used with the author's permission. See THIRD_PARTY_NOTICES.md.
+// Local changes: a status control at the top in three forms (ball, capsule, card) on one morphing
+// surface; separate confirm and handoff cards; buttons that refuse injected or obscured touches;
+// pass-through and hide hooks for the Actuator and screenshots; blocking UserGate calls.
 
 package io.github.ccch1mneyyy.dsh_app.phone.a11y
 
@@ -64,13 +61,7 @@ import io.github.ccch1mneyyy.dsh_app.phone.PhonePromptUi
 import io.github.ccch1mneyyy.dsh_app.phone.PromptPresentation
 import io.github.ccch1mneyyy.dsh_app.phone.MainThreadCall
 import io.github.ccch1mneyyy.dsh_app.pet.SafeArea
-import io.github.ccch1mneyyy.dsh_app.pet.Side
 import io.github.ccch1mneyyy.dsh_app.pet.WindowPos
-import kotlin.math.roundToInt
-import io.github.ccch1mneyyy.dsh_app.theme.ThemeAccent
-import android.animation.ValueAnimator
-import android.graphics.Rect
-import android.view.accessibility.AccessibilityWindowInfo
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -79,12 +70,10 @@ import java.util.concurrent.TimeUnit
  * (no SYSTEM_ALERT_WINDOW). Blocking calls come from the bridge worker; all views live on
  * the main thread.
  *
- * While a task runs the person sees one control, in three forms (docs/design/phone-overlay.md):
- * the capsule with the line and 暂停 / 停止 ([OverlayCapsule]), in the lower middle of the screen
- * until the person drags it elsewhere, the card it grows up into, and the ball it folds into
- * ([OverlayBall]), with a soft band of colour round the screen's edge ([EdgeBeam]). [FoldClock]
- * decides the form; this class plays the morphs between them, keeps the control where the person
- * put it and clear of the keyboard and the confirm card, and keeps 停止 one step away in every form.
+ * While a task runs the person sees one control at the top, in three forms
+ * (docs/design/phone-overlay.md): the capsule with the line and 暂停 / 停止 ([OverlayCapsule]),
+ * the card it grows into, and the ball it folds into ([OverlayBall]). [FoldClock] decides the
+ * form; this class plays the morphs between them and keeps 停止 one step away in every form.
  */
 internal class ControlOverlay(private val service: AccessibilityService) : UserGate, PhonePromptPresenter {
     private val main = Handler(Looper.getMainLooper())
@@ -152,33 +141,8 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private val fold = FoldClock()
     private var ball: OverlayBall? = null
 
-    /** The beam round the screen's edge, on exactly while the control shows for a live task (§12). */
-    private val beam = EdgeBeam(service, wm)
-
-    /** The top of a keyboard on screen (any app's, or 插话's), from the service's windows; null when none shows. */
-    private var imeTop: Int? = null
-    private val imeRect = Rect()
-
-    /** The capsule gliding to where it rests now: over (or back from) the keyboard or the confirm card, down for the card's room, to an anchor after a drag. */
-    private var lift: ValueAnimator? = null
-
-    /** Where the person put the capsule: its anchor across and its height (kept across tasks, [OverlayPrefs]). */
-    private var spot: CapsuleSpot
-
-    /** While the capsule is dragged: its steady left and centre y on screen when the drag started, and now. */
-    private var dragFrom: WindowPos? = null
-    private var dragAt: WindowPos? = null
-
-    /** The confirm card's height settled or changed: the capsule and a resting ball keep clear of it. */
-    private val obstacleWatch = View.OnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
-        if (bottom - top != oldBottom - oldTop) main.post { avoidObstacles() }
-    }
-
     /** What is on screen: the capsule (or card), or the ball (lags [fold] while a fold or unfold plays). */
     private var ballShown = false
-
-    /** The ball is gliding back to the capsule's end; its glide's end swaps the windows. A finger stops it. */
-    private var unfolding = false
     private val foldTick = Runnable { onFoldTick() }
 
     /** A narrower line may shrink the capsule now. */
@@ -192,7 +156,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     }
 
     init {
-        spot = OverlayPrefs.spot(overlayPrefs)
         fold.setAutoFold(OverlayPrefs.from(overlayPrefs).autoFold, SystemClock.uptimeMillis())
         overlayPrefs.registerOnSharedPreferenceChangeListener(prefsListener)
     }
@@ -397,7 +360,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
 
     @Suppress("DEPRECATION")
     private fun hiddenWindowIds(): Set<Int> = buildSet {
-        for (root in ownRoots()) {
+        for ((root, _) in windows()) {
             val id = runCatching {
                 if (!root.isAttachedToWindow || root.visibility == View.VISIBLE) null
                 else {
@@ -416,9 +379,8 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             syncWindows()
             confirmCard?.root?.visibility = v
             handoffCard?.root?.visibility = v
-            beam.setHidden(captureHidden || passThrough)
         }
-        return hide && (pill != null || confirmCard != null || handoffCard != null || beam.attached)
+        return hide && (pill != null || confirmCard != null || handoffCard != null)
     }
 
     /** Screen off, lock, 停止 elsewhere, service going away: answer everything pending with STOP. */
@@ -492,7 +454,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     /** Debug probe: what the control is showing. */
     fun debugState(): String = onMain(1_000) {
         "form=${fold.form} ballShown=$ballShown shape=${pill?.shape} paused=$paused stopped=$stoppedNote line=${line?.text} " +
-            "window=${pill?.params?.let { "${it.width}x${it.height}@${it.x},${it.y}" }} spot=$spot ball=${ball?.let { "${it.pos}" }} steps=${steps.before(line, 3)}"
+            "window=${pill?.params?.let { "${it.width}x${it.height}@${it.y}" }} ball=${ball?.let { "${it.pos}" }} steps=${steps.before(line, 3)}"
     } ?: "timeout"
 
     fun onConfigurationChanged() {
@@ -503,11 +465,9 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
                 pill?.let { removePill(animated = false); if (statusText != null) showPill() }
             } else {
                 pill?.let { p ->
-                    imeTop = imeWindowTop()
                     placeCapsule(p)
-                    ball?.let { b -> if (ballResting()) b.move(b.dockPos()) }
+                    ball?.let { b -> if (ballShown) b.move(b.dockPos()) }
                 }
-                beam.relayout()
                 confirmCard?.let { place(it.root, it.params, top = false) }
                 handoffCard?.let { place(it.root, it.params, top = true) }
             }
@@ -580,13 +540,8 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private fun showPill() {
         if (pill == null) {
             darkBuilt = isDark()
-            imeTop = imeWindowTop()
             val p = buildPill()
-            // The beam's window first, so the control's windows come over it.
-            if (EDGE_BEAM_ON) {
-                beam.attach(s(R.string.overlay_window_title), isDark(), ThemeAccent.notificationColor(service), captureHidden || passThrough)
-            }
-            if (!add(p.root, p.params)) { if (EDGE_BEAM_ON) beam.detach(animated = false); return }
+            if (!add(p.root, p.params)) return
             pill = p
             ballShown = false
             fold.start(now())
@@ -647,19 +602,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             stopLabel = if (stoppedNote) null else s(R.string.overlay_stop_description),
         )
         syncPreview()
-        syncBeam()
-    }
-
-    /**
-     * The edge beam: on while the control shows for a live task (not once 已停止, not while the
-     * handoff card has the screen), still and faint while paused, not drawn during a screenshot or
-     * an injected stroke.
-     */
-    private fun syncBeam() {
-        // 不要屏幕四周那圈炫光：关掉以后一圈都不画（胶囊本身仍然表示 DSH 在看屏幕）。
-        if (!EDGE_BEAM_ON) return
-        beam.set(on = pill != null && !stoppedNote && handoffCard == null, paused = paused)
-        beam.setHidden(captureHidden || passThrough)
     }
 
     /** 「已解除限制」 in bold over what is lifted (「系统设置、密码和验证码」), a size smaller. */
@@ -686,9 +628,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         endEditing()
         main.removeCallbacks(foldTick)
         main.removeCallbacks(shrinkTick)
-        lift?.cancel()
-        lift = null
-        beam.detach(animated && animationsOn())
         fold.reset()
         if (preservePrompts) {
             if (waiting()) fold.hold(FoldClock.Hold.CONFIRM, now())
@@ -696,12 +635,8 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         }
         val b = ball
         pill = null
-        // A capsule taken away under the finger: endDrag finds no capsule, so the drag ends here.
-        dragFrom = null
-        dragAt = null
         ball = null
         ballShown = false
-        unfolding = false
         steerNote = null
         p.cancelMorph()
         val roots = listOfNotNull(p.root.takeIf { it.isShown }, b?.root?.takeIf { it.isShown })
@@ -727,15 +662,10 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             stop = s(R.string.overlay_stop_description), steerHint = s(R.string.overlay_steer_hint), send = s(R.string.overlay_send),
             unlocksDescription = s(R.string.overlay_unlocked_description), review = s(R.string.overlay_unlocks_review),
             foldRow = s(R.string.overlay_fold_row), holdHint = s(R.string.overlay_hold_hint),
-            moveLeft = s(R.string.overlay_move_left), moveCentre = s(R.string.overlay_move_centre), moveRight = s(R.string.overlay_move_right),
         )
         lateinit var capsule: OverlayCapsule
         val actions = object : OverlayCapsule.Actions {
             override fun touched() = onPillTouched()
-            override fun dragStart() = startDrag()
-            override fun dragMove(dx: Float, dy: Float) = dragTo(dx, dy)
-            override fun dragEnd(velocityX: Float) = endDrag(velocityX)
-            override fun place(anchor: CapsuleAnchor) = moveTo(anchor)
             override fun mark() = collapseByHand()
             override fun line() = onLineTapped()
             override fun pause() = togglePause()
@@ -745,210 +675,25 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             override fun send() = sendInterjection()
             override fun inputDone() = endEditing()
         }
-        // A new size (a longer line, the card) keeps the capsule on its anchor, or under the finger.
-        capsule = OverlayCapsule(service, c, strings, actions) { capsule.params.x = capsuleX(capsule); update(capsule.root, capsule.params) }
+        capsule = OverlayCapsule(service, c, strings, actions) { update(capsule.root, capsule.params) }
         capsule.root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: View) = Unit
             override fun onViewDetachedFromWindow(view: View) {
                 if (previewPill === capsule) clearPreview()
             }
         })
-        // Hung from the bottom: the card grows up out of it and the header stays put. Placed from
-        // the left (capsuleX), and free to go past a side while it is dragged there.
-        capsule.params = params(top = false, keepScreenOn = true).apply {
-            gravity = Gravity.BOTTOM or Gravity.LEFT
-            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        }
-        capsule.anchor = steadyAnchor()
+        capsule.params = params(top = true, keepScreenOn = true)
         placeCapsule(capsule)
         return capsule
     }
 
-    /** Where the person put it (by default centred in the lower middle), clear of the bars, a keyboard and the confirm card ([CapsulePlacement]); sizes for this screen. */
+    /** Centred at the top, [CapsuleMetrics.TOP_GAP_DP] under the status bar; sizes for this screen. */
     private fun placeCapsule(p: OverlayCapsule) {
         val a = safeArea()
-        lift?.cancel()
-        lift = null
-        p.params.y = capsuleY(p, a)
-        p.place(CapsulePlacement.roomW(a), a.screenH)
-        p.params.x = capsuleX(p)
+        p.params.y = a.top + dp(CapsuleMetrics.TOP_GAP_DP) - p.padTop
+        p.place(a.screenW, a.screenH)
         update(p.root, p.params)
     }
-
-    /** The capsule's centre y with nothing in the way: where a ball the person never moved rests too. */
-    private fun capsuleCentre(a: SafeArea = safeArea(), obstacle: Int? = null, cardH: Int = 0) =
-        CapsulePlacement.centreY(a, dp(CapsuleMetrics.HEIGHT_DP), dp(CapsulePlacement.GAP_DP), obstacle, spot.fraction, cardH)
-
-    /** The capsule's window offset clear of what is in the way, low enough for the open card; the card's room above it follows. */
-    private fun capsuleY(p: OverlayCapsule, a: SafeArea): Int {
-        val headerH = dp(CapsuleMetrics.HEIGHT_DP)
-        // 打开卡片时胶囊原地不动（以前会为了给卡片腾高度而整体下移，看起来像自己在跑）。
-        val centre = capsuleCentre(a, obstacleTop(), 0)
-        p.maxCardHeight = CapsulePlacement.cardRoom(a, centre, headerH, dp(CapsulePlacement.GAP_DP))
-        return CapsulePlacement.windowY(a.screenH, centre, headerH, p.padBottom)
-    }
-
-    /** The capsule window's x: its steady capsule where it was dropped (or on its anchor), or where the finger has it. */
-    private fun capsuleX(p: OverlayCapsule): Int {
-        val a = safeArea()
-        val left = dragAt?.x
-            ?: spot.free?.let { CapsulePlacement.freeLeft(a, p.capsuleWidth, it) }
-            ?: CapsulePlacement.capsuleLeft(p.anchor, a, p.capsuleWidth, dp(CapsulePlacement.EDGE_DP))
-        return CapsulePlacement.windowX(left, p.padX, p.steadyLeft())
-    }
-
-    /** The side the steady capsule grows from: its anchor, or the nearer side when it was let go anywhere. */
-    private fun steadyAnchor(): CapsuleAnchor {
-        val free = spot.free ?: return spot.anchor
-        return if (free < 0.5f) CapsuleAnchor.LEFT else CapsuleAnchor.RIGHT
-    }
-
-    // ---- dragging the capsule -------------------------------------------------------------------
-
-    /** The header is being dragged: the card goes back to the capsule first, nothing folds meanwhile. */
-    private fun startDrag() {
-        val p = pill ?: return
-        lift?.cancel()
-        lift = null
-        main.removeCallbacks(foldTick)
-        if (fold.expanded) {
-            endEditing()
-            if (fold.collapse(now())) p.collapse(animationsOn())
-        }
-        val a = safeArea()
-        val headerH = dp(CapsuleMetrics.HEIGHT_DP)
-        val from = WindowPos(p.params.x + p.padX + p.steadyLeft(), a.screenH - p.params.y - p.padBottom - headerH / 2)
-        dragFrom = from
-        dragAt = from
-    }
-
-    /** Follows the finger: anywhere across (past a side too), up and down within the bars. */
-    private fun dragTo(dx: Float, dy: Float) {
-        val p = pill ?: return
-        val from = dragFrom ?: return
-        val a = safeArea()
-        val headerH = dp(CapsuleMetrics.HEIGHT_DP)
-        val at = WindowPos(from.x + dx.roundToInt(), CapsulePlacement.clampCentre(a, from.y + dy.roundToInt(), headerH, dp(CapsulePlacement.GAP_DP)))
-        dragAt = at
-        p.params.x = capsuleX(p)
-        p.params.y = CapsulePlacement.windowY(a.screenH, at.y, headerH, p.padBottom)
-        update(p.root, p.params)
-    }
-
-    /**
-     * Let go: past a side (or thrown out of it) the capsule folds into the ball there, at that
-     * height; otherwise it stays exactly where it was let go (自由拖动), whole on screen. Either is kept.
-     */
-    private fun endDrag(velocityX: Float) {
-        val p = pill ?: return
-        val at = dragAt ?: return
-        dragAt = null
-        dragFrom = null
-        val a = safeArea()
-        val headerH = dp(CapsuleMetrics.HEIGHT_DP)
-        val side = CapsulePlacement.foldSide(at.x, p.capsuleWidth, a.screenW, dp(CapsulePlacement.FOLD_OUT_DP), velocityX)
-        val anchor = when (side) {
-            Side.LEFT -> CapsuleAnchor.LEFT
-            Side.RIGHT -> CapsuleAnchor.RIGHT
-            null -> CapsulePlacement.anchorFor(at.x, p.capsuleWidth, a, dp(CapsulePlacement.EDGE_DP), velocityX)
-        }
-        // 自由拖动: kept a capsule, it stays exactly where it was let go (still whole on screen);
-        // thrown out past a side it folds into the ball there, as before.
-        val free = if (side == null) CapsulePlacement.shareFor(a, p.capsuleWidth, at.x) else null
-        spot = CapsuleSpot(anchor, CapsulePlacement.fractionFor(a, at.y, headerH, dp(CapsulePlacement.GAP_DP)), free)
-        OverlayPrefs.saveSpot(overlayPrefs, spot)
-        fold.touch(now())
-        if (side != null && !stoppedNote) {
-            val b = ensureBall()
-            if (b != null && fold.foldByHand(now())) {
-                // The capsule folds where it was let go and moves to its new anchor once it is hidden.
-                b.dropAt(side, at.y)
-                foldPill(animationsOn())
-                scheduleFold()
-                return
-            }
-        }
-        p.anchor = steadyAnchor()
-        avoidObstacles()
-        scheduleFold()
-    }
-
-    /** The screen reader's 移到左侧 / 中间 / 右侧: the same anchors, at the same height. */
-    private fun moveTo(anchor: CapsuleAnchor) {
-        val p = pill ?: return
-        spot = spot.copy(anchor = anchor, free = null)
-        OverlayPrefs.saveSpot(overlayPrefs, spot)
-        p.anchor = steadyAnchor()
-        avoidObstacles()
-    }
-
-    /** The higher of a keyboard's top and the confirm card's, on screen; null when neither shows. */
-    private fun obstacleTop(): Int? = listOfNotNull(imeTop, confirmTop()).minOrNull()
-
-    private fun confirmTop(): Int? {
-        val card = confirmCard ?: return null
-        val h = card.root.height.takeIf { it > 0 } ?: return null
-        return CapsulePlacement.windowTop(safeArea().screenH, card.params.y, h)
-    }
-
-    /** The top of the keyboard window on screen, if one shows. */
-    private fun imeWindowTop(): Int? = runCatching {
-        service.windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }?.let { w ->
-            w.getBoundsInScreen(imeRect)
-            imeRect.top.takeIf { !imeRect.isEmpty }
-        }
-    }.getOrNull()
-
-    /** The service's windows changed: a keyboard may have come or gone. */
-    fun onWindowsChanged() {
-        if (pill == null) return
-        val top = imeWindowTop()
-        if (top == imeTop) return
-        imeTop = top
-        avoidObstacles()
-    }
-
-    /**
-     * The capsule glides to where it rests now: over a keyboard or the confirm card or back, down
-     * for the open card's room or back up, to its anchor after a drag; a resting ball keeps clear
-     * of the confirm card too. Not while the finger has the capsule.
-     */
-    private fun avoidObstacles() {
-        val p = pill ?: return
-        if (dragAt != null) return
-        val toY = capsuleY(p, safeArea())
-        val toX = capsuleX(p)
-        lift?.cancel()
-        lift = null
-        if (toX != p.params.x || toY != p.params.y) {
-            if (!animationsOn() || !p.root.isShown) {
-                p.params.x = toX
-                p.params.y = toY
-                update(p.root, p.params)
-            } else {
-                val fromX = p.params.x
-                val fromY = p.params.y
-                lift = ValueAnimator.ofFloat(0f, 1f).apply {
-                    duration = OverlayMotion.RESIZE_MS
-                    interpolator = OverlayMotion.glide
-                    addUpdateListener { a ->
-                        val f = a.animatedValue as Float
-                        p.params.x = (fromX + (toX - fromX) * f).roundToInt()
-                        p.params.y = (fromY + (toY - fromY) * f).roundToInt()
-                        update(p.root, p.params)
-                    }
-                    start()
-                }
-            }
-        }
-        ball?.let { b -> if (ballResting() && !b.touching) b.glideTo(b.dockPos(), animationsOn()) }
-    }
-
-    /**
-     * The ball is the form on screen and not on its way back into the capsule: an unfold's glide
-     * ends in the window swap, so nothing may move it (moving cancels the glide, and the swap with it).
-     */
-    private fun ballResting() = ballShown && !unfolding
 
     /** The 「已解除限制」 row: 设置 › 手机操控 › 解除限制, through the app's own page link. */
     private fun openUnlocks() {
@@ -999,11 +744,10 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         if (stoppedNote || ballShown) return
         if (fold.expanded) {
             endEditing()
-            if (fold.collapse(now())) p.collapse(animationsOn()) { avoidObstacles() }
+            if (fold.collapse(now())) p.collapse(animationsOn())
         } else if (fold.expand(now())) {
             applyIdle(animated = true)
             renderPill(animated = false)
-            // 卡片在原地往上长；放不下就自己滚，胶囊不动。
             p.expand(animationsOn())
         }
         scheduleFold()
@@ -1054,7 +798,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         val note = s(R.string.overlay_steer_sent, text)
         steerNote = note
         // Back to the capsule: the note shows where the line is.
-        if (fold.collapse(now())) p.collapse(animationsOn()) { avoidObstacles() }
+        if (fold.collapse(now())) p.collapse(animationsOn())
         renderPill()
         scheduleFold()
         main.postDelayed({ if (pill === p && steerNote == note) { steerNote = null; renderPill() } }, 2_500)
@@ -1078,7 +822,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         if (!p.markShown()) { remove(root); return null }
         sharedPrompt = p
         confirmCard = Card(root, layout, null)
-        root.addOnLayoutChangeListener(obstacleWatch)
         holdFold(FoldClock.Hold.CONFIRM)
         renderPill()
         return {
@@ -1121,40 +864,59 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         card.addView(ScrollView(service).apply { addView(body); isVerticalScrollBarEnabled = false },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         card.addView(TextView(service).apply {
-            text = AppStrings.get(service, R.string.overlay_timeout_hint)
+            text = if (request.offerTaskWaiver) {
+                AppStrings.get(service, R.string.overlay_waiver_hint)
+            } else {
+                AppStrings.get(service, R.string.overlay_timeout_hint)
+            }
             textSize = 12f; setTextColor(c.faint); setLineSpacing(0f, 1.2f); setPadding(0, 0, 0, dp(10))
         })
 
         val armedAt = SystemClock.uptimeMillis() + ARM_MS
         val guarded = mutableListOf<GuardedButton>()
         fun decide(d: Decision) { if (pending.resolve(d)) main.post { if (pendingConfirm === pending) dismissConfirm() } }
-        // 允许一次 is the main answer; 本轮允许 (same app and kind, this turn only) stays beside 取消.
-        // A visual scope is its own grant: allow visual taps for this task, or only this one step.
-        val visual = request.visualScope != null
-        val round = !visual && request.allowRound
-        val primary = GuardedButton(service, armedAt).apply {
-            text = AppStrings.get(service, if (visual) R.string.phone_prompt_allow_visual else R.string.overlay_allow_once)
-            style(this, c.accent, c.onAccent, c)
-            setOnClickListener { decide(if (visual) Decision.ALLOW_VISUAL_FOR_TASK else Decision.ALLOW_ONCE) }
-        }
-        guarded += primary
-        card.addView(primary, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(8) })
-        val decline = textButton(AppStrings.get(service, R.string.overlay_decline), c.ink, c) { decide(Decision.DENY) }
-        decline.background = outlined(c)
-        if (round || visual) {
-            val second = GuardedButton(service, armedAt).apply {
-                text = AppStrings.get(service, if (round) R.string.overlay_allow_round else R.string.overlay_allow_once)
-                style(this, c.accentSoft, c.onAccentSoft, c)
-                setOnClickListener { decide(if (round) Decision.ALLOW_APP_FOR_TASK else Decision.ALLOW_ONCE) }
+        // 本任务免确认: the main choice waives the rest of the task. Otherwise, on the first action
+        // in an app, the main choice allows that app for the rest of the task so later steps there
+        // don't ask again. "Only this step" stays available as the quieter option either way.
+        val wide = request.visualScope != null || request.offerTaskWaiver || request.firstInApp
+        if (request.visualScope != null) {
+            val visual = GuardedButton(service, armedAt).apply {
+                text = AppStrings.get(service, R.string.phone_prompt_allow_visual)
+                style(this, c.accent, c.onAccent, c)
+                setOnClickListener { decide(Decision.ALLOW_VISUAL_FOR_TASK) }
             }
-            guarded += second
-            val row = LinearLayout(service).apply { gravity = Gravity.CENTER_VERTICAL }
-            row.addView(second, LinearLayout.LayoutParams(0, dp(46), 1f))
-            row.addView(decline, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginStart = dp(8) })
-            card.addView(row)
-        } else {
-            card.addView(decline, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)))
+            guarded += visual
+            card.addView(visual, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(8) })
+        } else if (request.offerTaskWaiver) {
+            val all4task = GuardedButton(service, armedAt).apply {
+                text = AppStrings.get(service, R.string.overlay_allow_remaining)
+                style(this, c.accent, c.onAccent, c)
+                setOnClickListener { decide(Decision.ALLOW_ALL_FOR_TASK) }
+            }
+            guarded += all4task
+            card.addView(all4task, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(8) })
+        } else if (request.firstInApp) {
+            val app4task = GuardedButton(service, armedAt).apply {
+                text = if (app != null) AppStrings.get(service, R.string.overlay_allow_app_task, app) else AppStrings.get(service, R.string.overlay_allow_this_app_task)
+                style(this, c.accent, c.onAccent, c)
+                setOnClickListener { decide(Decision.ALLOW_APP_FOR_TASK) }
+            }
+            guarded += app4task
+            card.addView(app4task, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(8) })
         }
+        val row = LinearLayout(service).apply { gravity = Gravity.CENTER_VERTICAL }
+        row.addView(textButton(AppStrings.get(service, R.string.overlay_stop), c.danger, c) { decide(Decision.STOP) })
+        row.addView(View(service), LinearLayout.LayoutParams(0, 1, 1f))
+        row.addView(textButton(AppStrings.get(service, R.string.overlay_decline), c.ink, c) { decide(Decision.DENY) }.apply { background = outlined(c) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(46)).apply { marginEnd = dp(8) })
+        val allow = GuardedButton(service, armedAt).apply {
+            text = if (wide) AppStrings.get(service, R.string.overlay_allow_step) else AppStrings.get(service, R.string.overlay_allow_once)
+            if (wide) style(this, c.accentSoft, c.onAccentSoft, c) else style(this, c.accent, c.onAccent, c)
+            setOnClickListener { decide(Decision.ALLOW_ONCE) }
+        }
+        guarded += allow
+        row.addView(allow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(46)))
+        card.addView(row)
         root.addView(card, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
 
         guarded.forEach { it.alpha = 0.5f }
@@ -1174,7 +936,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         if (!add(root, params)) return false
         if (pending.value != null) { remove(root); return false }
         confirmCard = Card(root, params, tick)
-        root.addOnLayoutChangeListener(obstacleWatch)
         pendingConfirm = pending
         tick.run()
         enter(root)
@@ -1186,13 +947,11 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private fun dismissConfirm() {
         val card = confirmCard ?: return
         card.tick?.let(main::removeCallbacks)
-        card.root.removeOnLayoutChangeListener(obstacleWatch)
         remove(card.root)
         confirmCard = null
         pendingConfirm = null
         releaseFold(FoldClock.Hold.CONFIRM)
         renderPill()
-        avoidObstacles()
     }
 
     // ---- handoff --------------------------------------------------------------------------------
@@ -1330,8 +1089,8 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     //
     // Folding: the surface narrows to the circle at its end on the ball's side, the row fading
     // first; the ball takes its place and glides to its dock. Unfolding: the ball glides back to
-    // that end and the capsule grows out of it. Capsule ↔ card: the same surface grows up and
-    // out from the header, the body fading in behind (OverlayCapsule). One window shows at a time, except a few
+    // that end and the capsule grows out of it. Capsule ↔ card: the same surface grows down and
+    // out, the body fading in behind (OverlayCapsule). One window shows at a time, except a few
     // frames of overlap at the swap (both are the same circle there), so neither ever blinks.
 
     private fun now() = SystemClock.uptimeMillis()
@@ -1339,17 +1098,16 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private fun scheduleFold() {
         syncPreview()
         main.removeCallbacks(foldTick)
-        // Nothing folds or fades under a dragging finger; the drag's end counts again.
-        if (debugFreeze || dragAt != null) return
+        if (debugFreeze) return
         val at = fold.nextAt ?: return
         main.postAtTime(foldTick, at)
     }
 
     private fun onFoldTick() {
-        if (debugFreeze || dragAt != null) return
+        if (debugFreeze) return
         when (fold.tick(now())) {
             FoldClock.Tick.FOLD -> foldPill(animationsOn())
-            FoldClock.Tick.COLLAPSE -> pill?.collapse(animationsOn()) { avoidObstacles() }
+            FoldClock.Tick.COLLAPSE -> pill?.collapse(animationsOn())
             FoldClock.Tick.DIM -> applyIdle(animated = true)
             FoldClock.Tick.NONE -> Unit
         }
@@ -1367,7 +1125,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
 
     private fun onBallTouched() {
         // A finger stops an unfold's glide: the capsule it had brought up (transparent) goes again.
-        unfolding = false
         syncWindows()
         fold.touch(now())
         applyIdle(animated = true)
@@ -1406,9 +1163,9 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             FoldClock.Form.BALL -> if (!ballShown) foldPill(animated)
             FoldClock.Form.CAPSULE -> when {
                 ballShown -> unfoldPill(animated)
-                p.shape == OverlayCapsule.Shape.CARD -> { endEditing(); p.collapse(animated) { avoidObstacles() } }
+                p.shape == OverlayCapsule.Shape.CARD -> { endEditing(); p.collapse(animated) }
             }
-            FoldClock.Form.CARD -> if (!ballShown && p.shape != OverlayCapsule.Shape.CARD) { avoidObstacles(); p.expand(animated) }
+            FoldClock.Form.CARD -> if (!ballShown && p.shape != OverlayCapsule.Shape.CARD) p.expand(animated)
         }
     }
 
@@ -1431,24 +1188,12 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         val durationMs = if (target < 1f) DIM_FADE_MS else UNDIM_FADE_MS
         ball?.setIdle(if (fold.folded) target else 1f, animated, durationMs)
         pill?.setIdle(if (fold.folded) 1f else target, animated, durationMs)
-        // An idle ball also slides half out over its side; a touch, a confirm or a handoff brings it back whole.
-        ball?.let { b ->
-            val tuck = fold.folded && fold.dimmed
-            if (b.tucked == tuck) return@let
-            b.tucked = tuck
-            // Never tucked away from under a finger; brought back out the moment one lands.
-            if (ballResting() && !(tuck && b.touching)) b.glideTo(b.dockPos(), animated, if (tuck) DIM_FADE_MS else UNTUCK_MS)
-        }
     }
 
     /** The ball's window for this control, added (hidden) on first use; null when the system refused it. */
     private fun ensureBall(): OverlayBall? {
         ball?.let { return it }
-        val b = OverlayBall(
-            service, wm, ::safeArea, colors(), ::onBallTapped, ::stopFromPill, ::onBallTouched,
-            capsuleCentre = { capsuleCentre() },
-            bottomLimit = { obstacleTop()?.minus(dp(CapsulePlacement.GAP_DP)) },
-        )
+        val b = OverlayBall(service, wm, ::safeArea, colors(), ::onBallTapped, ::stopFromPill, ::onBallTouched)
         if (!b.attach(s(R.string.overlay_window_title), passThrough, b.dockPos())) return null
         ball = b
         renderPill(animated = false)
@@ -1456,14 +1201,10 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     }
 
     /** The ball window over the surface's circle at ([circle]) in the capsule window. */
-    private fun ballOver(p: OverlayCapsule, b: OverlayBall, circle: Pair<Int, Int>): WindowPos {
-        val a = safeArea()
-        return BallGeometry.ballOver(
-            windowX = p.params.x,
-            windowY = CapsulePlacement.windowTop(a.screenH, p.params.y, p.params.height),
-            padX = p.padX, padTop = p.padTop, circleLeft = circle.first, circleTop = circle.second, pad = b.pad,
-        )
-    }
+    private fun ballOver(p: OverlayCapsule, b: OverlayBall, circle: Pair<Int, Int>): WindowPos = BallGeometry.ballOver(
+        windowX = BallGeometry.centredX(safeArea().screenW, p.params.width), windowY = p.params.y,
+        padX = p.padX, padTop = p.padTop, circleLeft = circle.first, circleTop = circle.second, pad = b.pad,
+    )
 
     private fun foldPill(animated: Boolean) {
         val p = pill ?: return
@@ -1486,7 +1227,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             b.fadeMark(1f, animated = false)
             ballShown = true
             syncWindows()
-            parkCapsule(p)
             renderPill(animated = false)
             return
         }
@@ -1498,20 +1238,10 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             showWindow(b.root)
             b.fadeMark(1f, animated = true)
             // The capsule goes (and gets its plain layout back) once the ball is surely drawn over it.
-            b.root.postDelayed({ if (pill === p && ballShown) { syncWindows(); p.settle(OverlayCapsule.Shape.CAPSULE); parkCapsule(p) } }, SWAP_MS)
+            b.root.postDelayed({ if (pill === p && ballShown) { syncWindows(); p.settle(OverlayCapsule.Shape.CAPSULE) } }, SWAP_MS)
             renderPill(animated = false)
             b.glideTo(b.dockPos(), animated = true)
         }
-    }
-
-    /** The hidden capsule goes to where it rests (its anchor may have changed with a drag off a side), for the next unfold. */
-    private fun parkCapsule(p: OverlayCapsule) {
-        lift?.cancel()
-        lift = null
-        p.anchor = steadyAnchor()
-        p.params.x = capsuleX(p)
-        p.params.y = capsuleY(p, safeArea())
-        update(p.root, p.params)
     }
 
     private fun unfoldPill(animated: Boolean) {
@@ -1542,9 +1272,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         p.root.visibility = if (captureHidden) View.INVISIBLE else View.VISIBLE
         // The ball goes back to the capsule's end first, its mark fading.
         b.fadeMark(0f, animated = true, durationMs = UNFOLD_GLIDE_MS)
-        unfolding = true
         b.glideTo(ballOver(p, b, p.capsuleEndCircle(side)), animated = true, durationMs = UNFOLD_GLIDE_MS) {
-            unfolding = false
             if (pill !== p || !ballShown) return@glideTo
             ballShown = false
             showWindow(p.root)
@@ -1563,7 +1291,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
      */
     private fun syncWindows() {
         syncPreview()
-        syncBeam()
         val p = pill ?: return
         val handoff = handoffCard != null
         val shown = if (captureHidden) View.INVISIBLE else View.VISIBLE
@@ -1665,25 +1392,16 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             update(root, params)
             any = true
         }
-        // The beam never takes a touch; while a stroke is injected it is not drawn at all.
-        if (beam.attached) {
-            beam.setHidden(captureHidden || on)
-            any = true
-        }
         return any
     }
 
-    /** The windows whose touchability follows pass-through (the beam is never touchable). */
     private fun windows(): List<Pair<View, WindowManager.LayoutParams>> = listOfNotNull(
         pill?.let { it.root to it.params }, ball?.let { it.root to it.params },
         confirmCard?.let { it.root to it.params }, handoffCard?.let { it.root to it.params },
     )
 
-    /** Every window of this control, the beam's included. */
-    private fun ownRoots(): List<View> = windows().map { it.first } + listOfNotNull(beam.root.takeIf { beam.attached })
-
     /** Main-thread identity check, including invisible roots during a display capture. */
-    internal fun ownsWindow(windowId: Int): Boolean = windowId >= 0 && ownRoots().any { root ->
+    internal fun ownsWindow(windowId: Int): Boolean = windowId >= 0 && windows().any { (root, _) ->
         if (!root.isAttachedToWindow) return@any false
         val node = root.createAccessibilityNodeInfo() ?: return@any false
         try { node.windowId == windowId } finally { node.recycle() }
@@ -1777,9 +1495,6 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         private const val TAG = "DshA11y"
         private const val ARM_MS = 600L
 
-        /** 屏幕四周那圈「正在被操作」的炫光色带（EdgeBeam）：不要，关掉。 */
-        private const val EDGE_BEAM_ON = false
-
         /** The app's page link for 解除限制 (lib/ui/settings/index/spots.dart). */
         private const val UNLOCKS_LINK = "dshgo://open/phone-unlocks"
 
@@ -1792,8 +1507,5 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         /** Going idle is slow and quiet; a touch brings it back at once. */
         private const val DIM_FADE_MS = 400L
         private const val UNDIM_FADE_MS = 120L
-
-        /** A touched half-hidden ball slides back out under the finger: quick, so a tap lands on it whole. */
-        private const val UNTUCK_MS = 200L
     }
 }
