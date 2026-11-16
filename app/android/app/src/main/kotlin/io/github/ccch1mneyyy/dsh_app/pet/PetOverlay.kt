@@ -800,7 +800,8 @@ internal object PetOverlay {
         val p = petParams ?: return
         val l = loaded ?: return
         if (!alive(petTicket)) return
-        val next = l.frames.frameFor(v.shown, dragging)
+        // 窗口必须装得下正在画的那一帧：只按“静止帧”给大小，边上会被窗口自己裁掉（看起来像跑出屏幕）。
+        val next = l.frames.frameFor(v.shown, dragging).union(l.frames.art(v.shown))
         if (next == v.frame) return
         val rest = restPos(v, p)
         v.setFrame(next)
