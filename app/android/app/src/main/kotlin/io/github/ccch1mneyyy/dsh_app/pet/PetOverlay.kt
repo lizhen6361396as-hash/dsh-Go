@@ -798,9 +798,6 @@ internal object PetOverlay {
         }
     }
 
-    /** 宠物窗口外面再留一圈余量：有几帧会画到窗口边界外一点，留出这段就不会贴到屏幕边上被切。 */
-    private const val SAFE_DP = 24f
-
     /**
      * 系统的“应用显示比例 / 兼容模式”会把这个 App 缩到比屏幕小的坐标空间（这台是 1080 宽、屏幕 1272 宽）。
      * 悬浮窗的坐标是按 App 自己的空间放的，所以边界也要按 App 空间算，否则窗口右边缘会落到屏幕外被切掉。
@@ -990,36 +987,7 @@ internal object PetOverlay {
     private fun update(v: View, p: WindowManager.LayoutParams) {
         if (!alive(windowTickets[v])) return
         try { wm?.updateViewLayout(v, p) } catch (e: Exception) { Log.w(TAG, "overlay update failed", e) }
-        traceGeometry(v, p)
     }
-
-    /** 临时诊断：把宠物窗口和它认为的屏幕尺寸写到 /sdcard/Download/DSH-Go/pet-geom.log。 */
-    private fun traceGeometry(v: View, p: WindowManager.LayoutParams) {
-        val now = System.currentTimeMillis()
-        if (now - lastTrace < 1500) return
-        lastTrace = now
-        runCatching {
-            val area = safeArea()
-            val loc = IntArray(2)
-            runCatching { v.getLocationOnScreen(loc) }
-            val line = "t=$now area=${area.screenW}x${area.screenH} " +
-                "in=${area.left},${area.top},${area.right},${area.bottom} " +
-                "win=${p.width}x${p.height}@${p.x},${p.y} view=${v.width}x${v.height} " +
-                "onScreen=${loc[0]},${loc[1]} dock=${dock.side}/${dock.yFraction} " +
-                "frame=${v.widthOfFrameOrMinus1()} scale=${loaded?.screenScale}\n"
-            val dir = java.io.File("/sdcard/Download/DSH-Go")
-            dir.mkdirs()
-            java.io.File(dir, "pet-geom.log").appendText(line)
-        }
-    }
-
-    private fun View.widthOfFrameOrMinus1(): String = try {
-        val v = this as PetView
-        "${v.frame.width}x${v.frame.height}"
-    } catch (_: Throwable) { "?" }
-
-    @Volatile
-    private var lastTrace = 0L
 
     private fun remove(v: View) {
         val ticket = windowTickets.remove(v)
