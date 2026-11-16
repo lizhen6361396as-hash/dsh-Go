@@ -781,6 +781,24 @@ internal object PetOverlay {
     /** 宠物窗口外面再留一圈余量：有几帧会画到窗口边界外一点，留出这段就不会贴到屏幕边上被切。 */
     private const val SAFE_DP = 24f
 
+    /**
+     * 系统的“应用显示比例 / 兼容模式”会把这个 App 缩到比屏幕小的坐标空间（这台是 1080 宽、屏幕 1272 宽）。
+     * 悬浮窗的坐标是按 App 自己的空间放的，所以边界也要按 App 空间算，否则窗口右边缘会落到屏幕外被切掉。
+     */
+    private fun inAppSpace(real: SafeArea): SafeArea {
+        val dm = app.resources.displayMetrics
+        val aw = dm.widthPixels
+        val ah = dm.heightPixels
+        if (aw <= 0 || ah <= 0 || aw >= real.screenW) return real
+        val kx = aw.toFloat() / real.screenW
+        val ky = ah.toFloat() / real.screenH
+        return SafeArea(
+            aw, ah,
+            (real.left * kx).roundToInt(), (real.top * ky).roundToInt(),
+            (real.right * kx).roundToInt(), (real.bottom * ky).roundToInt(),
+        )
+    }
+
     private fun petArea(): SafeArea = safeArea().let {
         val m = if (::app.isInitialized) edge(app) else 20
         SafeArea(it.screenW, it.screenH, it.left + m, it.top, it.right + m, it.bottom)
@@ -1105,7 +1123,8 @@ internal object PetOverlay {
         if (Build.VERSION.SDK_INT >= 30) {
             val m = w.currentWindowMetrics
             val i = m.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            return SafeArea(m.bounds.width(), m.bounds.height(), i.left, i.top, i.right, i.bottom)
+            val real = SafeArea(m.bounds.width(), m.bounds.height(), i.left, i.top, i.right, i.bottom)
+            return inAppSpace(real)
         }
         val dm = DisplayMetrics()
         @Suppress("DEPRECATION")
