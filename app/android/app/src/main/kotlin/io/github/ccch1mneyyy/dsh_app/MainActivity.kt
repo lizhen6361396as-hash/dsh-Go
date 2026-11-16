@@ -191,6 +191,8 @@ class MainActivity : FlutterActivity() {
                     applyRefreshRate()
                     result.success(null)
                 }
+                // 抽屉里的一键冻结: engine, pet and phone control stop together.
+                "freezeAll" -> result.success(Freeze.freeze(applicationContext))
                 "bringToFront" -> {
                     startActivity(
                         Intent(this, MainActivity::class.java)

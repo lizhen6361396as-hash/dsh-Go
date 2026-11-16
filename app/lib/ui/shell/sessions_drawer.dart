@@ -251,6 +251,7 @@ class SessionsDrawer extends ConsumerWidget {
                         child: IdentityBar(
                           onHost: () => showHostSheet(context, onManage: () => onOpen(DrawerDestination.remote)),
                           onLocalDetails: () => onOpen(DrawerDestination.engine),
+                          onFreeze: () => freezeEverything(context),
                           onFeatures: () => onOpen(DrawerDestination.features),
                           onSettings: () => onOpen(DrawerDestination.settings),
                           onSettingsHold: () => onOpen(DrawerDestination.settingsSearch),
@@ -942,12 +943,47 @@ class _RemoteEmptyState extends ConsumerWidget {
   }
 }
 
+/// 一键冻结 in the drawer: whether the app's own text is English.
+bool _freezeEnglish(BuildContext context) => Localizations.localeOf(context).languageCode != 'zh';
+
+/// The label / tooltip of 一键冻结.
+String freezeLabel(BuildContext context) => _freezeEnglish(context) ? 'Freeze all' : '一键冻结';
+
+/// Asks first (a running reply is interrupted), then freezes through `dsh/app`: the local engine,
+/// the pet and phone control stop at once. Opening the app thaws (MainActivity clears the flag).
+Future<void> freezeEverything(BuildContext context) async {
+  final en = _freezeEnglish(context);
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (dialog) => AlertDialog(
+      title: Text(freezeLabel(context)),
+      content: Text(en
+          ? 'Stops the local engine, the pet and phone control, so DSH stops using the battery in '
+              'the background. A reply being generated is interrupted. Opening the app brings it back.'
+          : '停止本机引擎、宠物和手机操控，让 DSH 不再在后台耗电。正在生成的回复会中断；重新打开 App 即可恢复。'),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(dialog).pop(false), child: Text(en ? 'Cancel' : '取消')),
+        FilledButton(onPressed: () => Navigator.of(dialog).pop(true), child: Text(en ? 'Freeze' : '冻结')),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  try {
+    await const MethodChannel('dsh/app').invokeMethod<bool>('freezeAll');
+    messenger?.showSnackBar(SnackBar(content: Text(en ? 'Frozen. Open the app to bring it back.' : '已冻结，重新打开 App 恢复')));
+  } catch (_) {
+    messenger?.showSnackBar(SnackBar(content: Text(en ? 'Freeze failed' : '冻结失败')));
+  }
+}
+
 /// The drawer's footer: the host icon opens its details; the name and dropdown
 /// switch hosts. 全部功能 and 设置 follow as two equal round buttons.
 class IdentityBar extends ConsumerWidget {
   const IdentityBar({
     super.key,
     required this.onHost,
+    required this.onFreeze,
     required this.onFeatures,
     required this.onSettings,
     this.onSettingsHold,
@@ -958,6 +994,9 @@ class IdentityBar extends ConsumerWidget {
 
   /// Local hosts have engine details, not a remote network path.
   final VoidCallback? onLocalDetails;
+
+  /// 一键冻结: stops the engine, the pet and phone control in one tap.
+  final VoidCallback onFreeze;
 
   /// 全部功能: what there is to do now. (网页版 is in 全部功能, in 设置 ›
   /// 界面 and on the brand row's switch.)
@@ -1077,6 +1116,8 @@ class IdentityBar extends ConsumerWidget {
               ],
             ),
           ),
+          const SizedBox(width: 8),
+          _RoundButton(icon: AppIcons.power, tooltip: freezeLabel(context), onTap: onFreeze),
           const SizedBox(width: 8),
           _RoundButton(icon: AppIcons.allFeatures, tooltip: l10n.hubSettingsAllFeatures, onTap: onFeatures),
           const SizedBox(width: 8),
