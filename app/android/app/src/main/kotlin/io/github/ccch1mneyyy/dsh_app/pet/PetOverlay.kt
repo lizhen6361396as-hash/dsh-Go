@@ -780,8 +780,10 @@ internal object PetOverlay {
 
     private fun placeRest(v: PetView, p: WindowManager.LayoutParams, rest: WindowPos) {
         val at = PetFrames.windowAt(rest, v.frame)
-        p.x = at.x
-        p.y = at.y
+        // 一开始就得在屏幕里：换过分辨率/字号、或者上次记住的位置在旧屏幕上，都不许停到屏幕外。
+        val safe = EdgeSnap.clampDrag(at.x, at.y, v.frame.width, v.frame.height, safeArea())
+        p.x = safe.x
+        p.y = safe.y
     }
 
     /**
@@ -1049,13 +1051,18 @@ internal object PetOverlay {
      * of hanging off an edge; when it fits already, the size is exactly what was asked for.
      */
     private fun fitScale(pack: PetPack, scale: Float, area: SafeArea): Float {
-        val roomW = (area.screenW - area.left - area.right).toFloat()
-        val roomH = (area.screenH - area.top - area.bottom).toFloat()
-        if (roomW <= 0f || roomH <= 0f) return scale
-        val box = pack.unionBox(pack.usedAnimations()).union(pack.windowBox())
-        if (box.w <= 0f || box.h <= 0f) return scale
-        val fit = minOf(roomW * 0.96f / box.w, roomH * 0.85f / box.h)
-        return minOf(scale, fit)
+        if (scale <= 0f) return scale
+        return runCatching {
+            val roomW = (area.screenW - area.left - area.right).toFloat()
+            val roomH = (area.screenH - area.top - area.bottom).toFloat()
+            if (roomW <= 0f || roomH <= 0f) return@runCatching scale
+            val box = pack.windowBox()
+            if (box.w <= 0f || box.h <= 0f) return@runCatching scale
+            val fit = minOf(roomW * 0.92f / box.w, roomH * 0.85f / box.h)
+            // 只有大得离谱时才缩，而且至少留一半，绝不把宠物缩没了
+            val capped = maxOf(fit, scale * 0.5f).coerceAtLeast(1f)
+            minOf(scale, capped)
+        }.getOrDefault(scale)
     }
 
     private fun safeArea(): SafeArea {
