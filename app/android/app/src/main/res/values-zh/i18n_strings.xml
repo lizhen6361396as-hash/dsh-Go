@@ -279,6 +279,7 @@
     <string name="service_title">本地 DSH</string>
     <string name="service_stop_phone">停止手机操控</string>
     <string name="service_stop">停止引擎</string>
+    <string name="service_freeze">一键冻结</string>
     <string name="service_package_checksum_failed">运行时包校验失败（sha256 不匹配），请重新安装 App</string>
     <string name="service_storage_insufficient">存储空间不足：需要约 %1$s MB，当前可用 %2$s MB</string>
     <!-- share -->

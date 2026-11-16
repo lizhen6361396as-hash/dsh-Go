@@ -298,7 +298,12 @@ internal class HoldToStop(val armMs: Long = ARM_MS, val fillMs: Long = FILL_MS) 
 internal enum class CapsuleAnchor { LEFT, CENTRE, RIGHT }
 
 /** Where the person left the capsule: across, and its centre's height as a share of the safe height. Kept across tasks. */
-internal data class CapsuleSpot(val anchor: CapsuleAnchor = CapsuleAnchor.CENTRE, val fraction: Float = CapsulePlacement.CENTRE)
+internal data class CapsuleSpot(
+    val anchor: CapsuleAnchor = CapsuleAnchor.CENTRE,
+    val fraction: Float = CapsulePlacement.CENTRE,
+    /** Let go anywhere across: its left as a share of the room across; null puts it back on [anchor]. */
+    val free: Float? = null,
+)
 
 /**
  * Where the capsule sits, in px. By default centred in the lower middle of the screen (its centre
@@ -355,6 +360,23 @@ internal object CapsulePlacement {
         CapsuleAnchor.LEFT -> area.left + edge
         CapsuleAnchor.CENTRE -> (area.screenW - capW) / 2
         CapsuleAnchor.RIGHT -> area.screenW - area.right - edge - capW
+    }
+
+    /**
+     * 自由拖动: the capsule's left with its centre at [share] (0…1) of the room across, inside the
+     * safe area and clear of the cutout on either side.
+     */
+    fun freeLeft(area: SafeArea, capW: Int, share: Float): Int {
+        val room = roomW(area) - capW
+        if (room <= 0) return area.left
+        return area.left + (room * share.coerceIn(0f, 1f)).roundToInt()
+    }
+
+    /** What [freeLeft] takes back: a capsule let go with its left at [capLeft] keeps that place. */
+    fun shareFor(area: SafeArea, capW: Int, capLeft: Int): Float {
+        val room = roomW(area) - capW
+        if (room <= 0) return 0.5f
+        return ((capLeft - area.left).toFloat() / room).coerceIn(0f, 1f)
     }
 
     /** Where a steady capsule [capW] wide sits in a surface [extentW] wide: on its anchor's side, so it grows from there. */

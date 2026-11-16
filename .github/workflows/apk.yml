@@ -1,0 +1,57 @@
+# 云编译 APK：手动触发，产出 arm64 的 release 包。
+# 签名：仓库 Secrets 里放好 KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
+# 就按 release 签（能覆盖已安装的包）；没放则用 debug 签名（安装前要先卸载旧包）。
+name: APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.7"
+          channel: stable
+          cache: true
+
+      - name: 依赖
+        working-directory: app
+        run: flutter pub get
+
+      - name: 写入签名配置
+        if: env.KEYSTORE_BASE64 != ''
+        working-directory: app/android
+        env:
+          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/dshgo.keystore"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$RUNNER_TEMP/dshgo.keystore" "$STORE_PASS" "$KEY_ALIAS" "$KEY_PASS" > key.properties
+          chmod 600 key.properties
+
+      - name: 编译
+        working-directory: app
+        run: flutter build apk --release --target-platform android-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-apk
+          if-no-files-found: error
+          path: app/build/app/outputs/flutter-apk/*.apk

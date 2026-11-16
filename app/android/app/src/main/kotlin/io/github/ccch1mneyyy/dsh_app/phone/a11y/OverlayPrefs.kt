@@ -20,6 +20,8 @@ data class OverlayPrefs(val idleOpacity: Float = DEFAULT_OPACITY, val autoFold: 
         const val K_AUTO_FOLD = "autoFold"
         private const val K_CAPSULE_ANCHOR = "capsuleAnchor"
         private const val K_CAPSULE_Y = "capsuleY"
+        /** Dropped anywhere across (自由拖动): its left as a share of the room; absent while on an anchor. */
+        private const val K_CAPSULE_X = "capsuleX"
 
         /**
          * 70 %: an idle ball still reads as there, while the page behind shows through it. Only
@@ -60,10 +62,14 @@ data class OverlayPrefs(val idleOpacity: Float = DEFAULT_OPACITY, val autoFold: 
         internal fun spot(p: SharedPreferences): CapsuleSpot = CapsuleSpot(
             CapsuleAnchor.entries.firstOrNull { it.name == p.getString(K_CAPSULE_ANCHOR, null) } ?: CapsuleAnchor.CENTRE,
             p.getFloat(K_CAPSULE_Y, CapsulePlacement.CENTRE),
+            p.getFloat(K_CAPSULE_X, Float.NaN).takeUnless { it.isNaN() },
         )
 
         internal fun saveSpot(p: SharedPreferences, spot: CapsuleSpot) {
-            p.edit().putString(K_CAPSULE_ANCHOR, spot.anchor.name).putFloat(K_CAPSULE_Y, spot.fraction).apply()
+            val edit = p.edit().putString(K_CAPSULE_ANCHOR, spot.anchor.name).putFloat(K_CAPSULE_Y, spot.fraction)
+            val free = spot.free
+            if (free != null) edit.putFloat(K_CAPSULE_X, free) else edit.remove(K_CAPSULE_X)
+            edit.apply()
         }
     }
 }

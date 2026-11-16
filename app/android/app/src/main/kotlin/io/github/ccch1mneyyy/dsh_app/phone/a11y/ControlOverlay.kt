@@ -755,7 +755,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             gravity = Gravity.BOTTOM or Gravity.LEFT
             flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         }
-        capsule.anchor = spot.anchor
+        capsule.anchor = steadyAnchor()
         placeCapsule(capsule)
         return capsule
     }
@@ -783,10 +783,19 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
         return CapsulePlacement.windowY(a.screenH, centre, headerH, p.padBottom)
     }
 
-    /** The capsule window's x: its steady capsule on the anchor, or where the finger has it. */
+    /** The capsule window's x: its steady capsule where it was dropped (or on its anchor), or where the finger has it. */
     private fun capsuleX(p: OverlayCapsule): Int {
-        val left = dragAt?.x ?: CapsulePlacement.capsuleLeft(p.anchor, safeArea(), p.capsuleWidth, dp(CapsulePlacement.EDGE_DP))
+        val a = safeArea()
+        val left = dragAt?.x
+            ?: spot.free?.let { CapsulePlacement.freeLeft(a, p.capsuleWidth, it) }
+            ?: CapsulePlacement.capsuleLeft(p.anchor, a, p.capsuleWidth, dp(CapsulePlacement.EDGE_DP))
         return CapsulePlacement.windowX(left, p.padX, p.steadyLeft())
+    }
+
+    /** The side the steady capsule grows from: its anchor, or the nearer side when it was let go anywhere. */
+    private fun steadyAnchor(): CapsuleAnchor {
+        val free = spot.free ?: return spot.anchor
+        return if (free < 0.5f) CapsuleAnchor.LEFT else CapsuleAnchor.RIGHT
     }
 
     // ---- dragging the capsule -------------------------------------------------------------------
@@ -823,7 +832,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
 
     /**
      * Let go: past a side (or thrown out of it) the capsule folds into the ball there, at that
-     * height; otherwise it keeps the height and glides to the nearest anchor. Either is kept.
+     * height; otherwise it stays exactly where it was let go (自由拖动), whole on screen. Either is kept.
      */
     private fun endDrag(velocityX: Float) {
         val p = pill ?: return
@@ -838,7 +847,10 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
             Side.RIGHT -> CapsuleAnchor.RIGHT
             null -> CapsulePlacement.anchorFor(at.x, p.capsuleWidth, a, dp(CapsulePlacement.EDGE_DP), velocityX)
         }
-        spot = CapsuleSpot(anchor, CapsulePlacement.fractionFor(a, at.y, headerH, dp(CapsulePlacement.GAP_DP)))
+        // 自由拖动: kept a capsule, it stays exactly where it was let go (still whole on screen);
+        // thrown out past a side it folds into the ball there, as before.
+        val free = if (side == null) CapsulePlacement.shareFor(a, p.capsuleWidth, at.x) else null
+        spot = CapsuleSpot(anchor, CapsulePlacement.fractionFor(a, at.y, headerH, dp(CapsulePlacement.GAP_DP)), free)
         OverlayPrefs.saveSpot(overlayPrefs, spot)
         fold.touch(now())
         if (side != null && !stoppedNote) {
@@ -851,7 +863,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
                 return
             }
         }
-        p.anchor = anchor
+        p.anchor = steadyAnchor()
         avoidObstacles()
         scheduleFold()
     }
@@ -859,9 +871,9 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     /** The screen reader's 移到左侧 / 中间 / 右侧: the same anchors, at the same height. */
     private fun moveTo(anchor: CapsuleAnchor) {
         val p = pill ?: return
-        spot = spot.copy(anchor = anchor)
+        spot = spot.copy(anchor = anchor, free = null)
         OverlayPrefs.saveSpot(overlayPrefs, spot)
-        p.anchor = anchor
+        p.anchor = steadyAnchor()
         avoidObstacles()
     }
 
@@ -1492,7 +1504,7 @@ internal class ControlOverlay(private val service: AccessibilityService) : UserG
     private fun parkCapsule(p: OverlayCapsule) {
         lift?.cancel()
         lift = null
-        p.anchor = spot.anchor
+        p.anchor = steadyAnchor()
         p.params.x = capsuleX(p)
         p.params.y = capsuleY(p, safeArea())
         update(p.root, p.params)

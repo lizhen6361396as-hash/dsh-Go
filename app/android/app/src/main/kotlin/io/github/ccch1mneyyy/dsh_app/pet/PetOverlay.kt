@@ -497,7 +497,7 @@ internal object PetOverlay {
                         geometry.width / 2 + 1, geometry.height / 2 + 1)
                     val previous = WindowPos(p.x, p.y)
                     val wanted = CompanionFloatGeometry.move(previous, before, next)
-                    val pos = if (dragging) EdgeSnap.clampDrag(wanted.x, wanted.y, next.width, next.height, safeArea()) else wanted
+                    val pos = EdgeSnap.clampDrag(wanted.x, wanted.y, next.width, next.height, safeArea())
                     val dx = pos.x - previous.x
                     val dy = pos.y - previous.y
                     dragStart = dragStart?.let { WindowPos(it.x + dx, it.y + dy) }
@@ -803,7 +803,8 @@ internal object PetOverlay {
         p.width = next.width
         p.height = next.height
         placeRest(v, p, rest)
-        if (dragging) EdgeSnap.clampDrag(p.x, p.y, p.width, p.height, safeArea()).let { p.x = it.x; p.y = it.y }
+        // 不管何时都要在屏幕内: a frame that grew past the dock (a jump, a thought cloud) is kept whole.
+        EdgeSnap.clampDrag(p.x, p.y, p.width, p.height, safeArea()).let { p.x = it.x; p.y = it.y }
         update(v, p)
     }
 
