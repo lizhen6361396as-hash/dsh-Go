@@ -48,6 +48,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import io.github.ccch1mneyyy.dsh_app.MainActivity
 import io.github.ccch1mneyyy.dsh_app.R
+import io.github.ccch1mneyyy.dsh_app.freeze.Freeze
 import io.github.ccch1mneyyy.dsh_app.nativemedia.MicArbiter
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
@@ -309,7 +310,8 @@ internal object PetOverlay {
 
     fun setEnabled(on: Boolean): Map<String, Any?> {
         if (!on) capture.invalidate()
-        machine.enabled = on
+        // 冻结期间不接受“打开宠物”，等回到 App 解冻后再按需恢复。
+        machine.enabled = on && !Freeze.isFrozen(app)
         prefs.edit().putBoolean(K_ENABLED, on).apply()
         if (on) {
             failedIds.clear()
@@ -384,6 +386,15 @@ internal object PetOverlay {
 
     fun evaluate() {
         if (!initialized) return
+        // 一键冻结之后宠物不许自己回来：冻结标记在重新打开 App 前一直有效。
+        if (Freeze.isFrozen(app)) {
+            stopLoop()
+            stopCompanion()
+            removeWindows()
+            speaksForResults = false
+            publishStatus()
+            return
+        }
         main.removeCallbacks(evaluateRunnable)
         if (capture.inFlight) {
             // Keep the invisible PET ticket for openIntent's authenticated generation, but never
@@ -907,6 +918,7 @@ internal object PetOverlay {
 
     /** The pet window, on the right host; false when it couldn't be added. */
     private fun attachPet(): Boolean {
+        if (Freeze.isFrozen(app)) return false
         val want = overlayHost()
         if (want == OverlayHost.NONE) return false
         val service = PhoneA11yService.instance

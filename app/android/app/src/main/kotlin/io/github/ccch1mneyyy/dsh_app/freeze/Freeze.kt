@@ -2,6 +2,7 @@ package io.github.ccch1mneyyy.dsh_app.freeze
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.github.ccch1mneyyy.dsh_app.pet.PetOverlay
 import io.github.ccch1mneyyy.dsh_app.pet.PetOverlayService
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
 import io.github.ccch1mneyyy.dsh_app.runtime.RuntimeController
@@ -38,6 +39,8 @@ object Freeze {
         // Phone control first: its overlay and the task it shows go with the engine.
         runCatching { PhoneA11yService.instance?.stopAll("一键冻结") }
         runCatching { PetOverlayService.ensure(app, false) }
+        // 光停服务不够：宠物是悬浮窗，服务停了窗口还在；让宠物立刻按“冻结中”把自己收掉。
+        runCatching { PetOverlay.evaluate() }
         runCatching { controller.stop() }
         return engine
     }
