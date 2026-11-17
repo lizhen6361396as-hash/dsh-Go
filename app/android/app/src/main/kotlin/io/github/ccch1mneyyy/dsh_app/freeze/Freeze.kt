@@ -50,4 +50,19 @@ object Freeze {
         val p = prefs(ctx)
         if (p.getLong(K_AT, 0L) != 0L) p.edit().remove(K_AT).apply()
     }
+
+    /**
+     * 解冻并把它能拉起来的都拉起来：宠物按原来的开关恢复，后台屏 / Shizuku 通道按「保持通道」恢复。
+     * 引擎本身由调用方启动（[thaw] 只在引擎启动时被叫到）。
+     */
+    fun thaw(ctx: Context) {
+        val app = ctx.applicationContext
+        if (!isFrozen(app)) return
+        clear(app)
+        runCatching { PetOverlay.evaluate() }
+        runCatching {
+            io.github.ccch1mneyyy.dsh_app.phone.background.BackgroundControl
+                .get(app).restoreKeptChannel()
+        }
+    }
 }

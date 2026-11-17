@@ -37,6 +37,8 @@ class DshService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val controller = RuntimeController.get(this)
+        // 引擎一启动就解冻：不管是从 App 里、通知里还是别处拉起来的，宠物和后台通道都跟着回来。
+        if (intent?.action == ACTION_START || intent?.action == null) Freeze.thaw(this)
         when (intent?.action) {
             ACTION_INSTALL -> {
                 // First unpack or an upgrade: keep the process (and the CPU) up until it is done.
