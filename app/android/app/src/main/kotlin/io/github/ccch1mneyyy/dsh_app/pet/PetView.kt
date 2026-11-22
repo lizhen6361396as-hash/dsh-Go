@@ -123,6 +123,17 @@ internal class PetView(context: Context, private val listener: Listener) : Frame
     /** The animation on screen (null before the first sheet arrives). */
     val shown: PetAnimation? get() = if (companionGeometry == null) anim else null
 
+    /**
+     * 窗口要多大才画得下现在这一帧：静止帧和正在播的这张图取并集。只按“名目上的动画”给大小，
+     * 实际在画的那张比它宽时，右边会被窗口自身裁掉（看着就像跑出屏幕）。
+     */
+    fun artFrame(): FramePx? {
+        if (companionGeometry != null) return null
+        val s = sprites ?: return null
+        val a = anim ?: return null
+        return s.frames.rest.union(s.frames.cell(a))
+    }
+
     fun setSprites(loaded: PetSprites.Loaded?) {
         sprites = loaded
         paint.isFilterBitmap = loaded?.pack?.crisp == false

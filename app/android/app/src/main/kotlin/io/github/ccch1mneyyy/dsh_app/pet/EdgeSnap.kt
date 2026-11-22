@@ -102,9 +102,9 @@ object EdgeSnap {
         return Dock(sideFor(rest.x, restW, area, velocityX), f)
     }
 
-    /** While dragging: follow the finger, but keep the whole pet on screen. */
+    /** Follow the finger (or a landing), but keep the whole pet inside the safe area, always. */
     fun clampDrag(x: Int, y: Int, w: Int, h: Int, area: SafeArea): WindowPos = WindowPos(
-        x.coerceIn(0, maxOf(0, area.screenW - w)),
+        x.coerceIn(area.left, maxOf(area.left, area.screenW - area.right - w)),
         y.coerceIn(area.top, maxOf(area.top, area.screenH - area.bottom - h)),
     )
 
