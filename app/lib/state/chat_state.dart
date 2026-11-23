@@ -489,11 +489,12 @@ class ChatController extends Notifier<ChatState> {
   final _claimedAt = <String, int>{};
   final _retryingFailed = <String>{};
 
-  /// An interjection whose splice the Host canceled never reached the model
-  /// (the turn it joined ended first). It goes again as a queued prompt once;
-  /// a second cancellation leaves the failed-submission card instead of
-  /// looping.
-  final _requeued = <String>{};
+  /// An interjection whose splice the Host canceled never reached the model:
+  /// the turn it joined ended first. Kept (with the time it was dropped) until
+  /// that turn end, then sent again as a queued prompt; see
+  /// [_requeueCanceled]. A queued (next-turn) prompt canceled on purpose is
+  /// never kept here.
+  final _canceledInterjections = <String, (PendingPrompt, DateTime)>{};
 
   /// Sends still waiting for the Host to answer the prompt RPC. A prompt
   /// here may well have landed; anything else with no inbox slot after a
@@ -859,23 +860,23 @@ class ChatController extends Notifier<ChatState> {
             if (_awayLong && !_quiet && _transcript.running) scheduleMicrotask(_quietIfRunning);
             if (reconcile) {
               final removed = before.difference(_inboxIds());
-              final requeue = <PendingPrompt>[];
               if (event is InboxSplicedEvent && !event.canceled) {
                 for (final prompt in _pending) {
                   if (removed.contains(prompt.requestId)) _claimedAt[prompt.requestId] = event.seq;
                 }
               } else if (event is! SessionSnapshotEvent) {
-                // A canceled splice drops what was waiting. When that is the
-                // person's own interjection it never reached the model, so it
-                // goes again as a queued prompt (next turn) instead of
-                // vanishing from the chat.
-                if (event is InboxSplicedEvent) {
+                // A canceled splice drops what was waiting. A queued prompt is
+                // withdrawn on purpose, but an interjection (next-step) was
+                // dropped because the turn it joined ended first: it never
+                // reached the model. Keep it until that turn end, then send it
+                // again as a queued prompt instead of losing the words.
+                if (event is InboxSplicedEvent && event.target == 'next-step') {
                   for (final prompt in _pending) {
                     if (!removed.contains(prompt.requestId)) continue;
+                    if (prompt.mode != SendMode.steer) continue;
                     if (prompt.isAutomatic || !prompt.resendable) continue;
-                    if (!_requeued.add(prompt.requestId)) continue;
-                    requeue.add(prompt);
-                    removed.remove(prompt.requestId);
+                    if (_isMoving(prompt.requestId)) continue;
+                    _canceledInterjections[prompt.requestId] = (prompt, DateTime.now());
                   }
                 }
                 _withdrawn.addAll(removed);
@@ -894,7 +895,6 @@ class ChatController extends Notifier<ChatState> {
                   else
                     prompt,
               ]);
-              if (requeue.isNotEmpty) scheduleMicrotask(() => _requeueCanceled(requeue));
             }
             // A plugin may deliberately consume input without a user echo.
             // Only failed/cancelled claims need the older-Host recovery card.
@@ -907,6 +907,7 @@ class ChatController extends Notifier<ChatState> {
             for (final end in endings) {
               _settleClaims(end);
             }
+            if (endings.isNotEmpty) _requeueDroppedInterjections();
             if (event is UserMessageEvent) {
               _dropEchoed([event]);
             } else if (event is SessionSnapshotEvent) {
@@ -1002,21 +1003,43 @@ class ChatController extends Notifier<ChatState> {
     }
   }
 
-  /// A canceled interjection goes again as a queued prompt: that turn ended
-  /// before it read the message, and a queued one survives the turn that
-  /// dropped it (it starts, or joins, the next turn). One retry per prompt; a
-  /// second cancellation leaves the failed-submission card instead of looping,
-  /// and so does a Host that refuses the resend.
+  /// The turn that dropped interjections has ended: send those again as queued
+  /// prompts, so they start (or join) the next turn instead of being lost. An
+  /// interjection that came back to the inbox meanwhile, or that waited over
+  /// two minutes without a turn end, is forgotten.
+  void _requeueDroppedInterjections() {
+    if (_canceledInterjections.isEmpty) return;
+    final now = DateTime.now();
+    final inbox = _inboxIds();
+    final again = <PendingPrompt>[];
+    _canceledInterjections.removeWhere((id, kept) {
+      if (inbox.contains(id)) return true;
+      if (now.difference(kept.$2) > const Duration(minutes: 2)) return true;
+      again.add(kept.$1);
+      return true;
+    });
+    if (again.isNotEmpty) scheduleMicrotask(() => _requeueCanceled(again));
+  }
+
+  /// A dropped interjection goes again as a queued prompt: a queued one
+  /// survives the turn that dropped it. Its bubble comes back as the next
+  /// turn's waiting prompt (the same request id, so no duplicate row); a Host
+  /// that refuses the resend leaves the failed-submission card instead, never
+  /// a silent loss.
   Future<void> _requeueCanceled(List<PendingPrompt> prompts) async {
     for (final prompt in prompts) {
       final client = _client;
       if (!ref.mounted || client == null || !_canControl) return;
+      if (_inboxIds().contains(prompt.requestId)) continue;
       final current = _pending.where((p) => p.requestId == prompt.requestId).firstOrNull;
-      // Echoed, claimed or settled meanwhile: nothing to put back.
-      if (current == null) continue;
-      final queued = current.withMode(SendMode.queue).placed(null, null);
+      // Echoed or settled meanwhile: nothing to put back.
+      if (current != null && current.failed) continue;
+      final queued = (current ?? prompt).withMode(SendMode.queue).placed(null, null);
+      _withdrawn.remove(queued.requestId);
       _pending = List.unmodifiable([
-        for (final p in _pending) p.requestId == prompt.requestId ? queued : p,
+        for (final p in _pending)
+          if (p.requestId != queued.requestId) p,
+        queued,
       ]);
       state = state.copyWith(pending: _placePending());
       final operation = _ChatOperation(ref, client, _syncScope);
