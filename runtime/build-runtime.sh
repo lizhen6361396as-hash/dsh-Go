@@ -450,7 +450,7 @@ PYEOF
   log "patching DSH (runtime/patches, pinned for $DSH_VERSION)"
   local patch_extra=()
   # DSH_PATCH_RECORD=1：未固定版本的引擎（如 0.2.2-rc.5）先按 --record 落补丁并接受实测哈希
-  if [[ "${DSH_PATCH_RECORD:-0}" == "1" ]]; then patch_extra+=(--record); fi
+  if [[ "${DSH_PATCH_RECORD:-0}" == "1" ]]; then patch_extra+=(--record --lenient); fi
   "${PY[@]}" patch-dsh --prefix "$prefix" --dsh-version "$DSH_VERSION" --target android --patches "$HERE/patches" \
     --out "$work/dsh-patches.json" --target-report "$work/dsh-patch-target.json" ${patch_extra[@]+"${patch_extra[@]}"} >&2
   local bridge="$HERE/bridge/dsh-go-bridge"

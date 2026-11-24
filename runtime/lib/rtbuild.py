@@ -330,13 +330,17 @@ def parse_unified_diff(text):
     return files
 
 
+class PatchUnsuitable(Exception):
+    """The upstream file no longer matches this patch; only tolerated under --lenient."""
+
+
 def apply_hunks(data, hunks, label):
     """Each hunk's old block (context + removed lines) must occur exactly once; no fuzz, any offset."""
     for n, (old, new) in enumerate(hunks, 1):
         count = data.count(old)
         if count != 1:
-            raise SystemExit("%s: hunk %d matches %d places (needs exactly 1); the upstream file changed, "
-                             "re-vet the patch" % (label, n, count))
+            raise PatchUnsuitable("%s: hunk %d matches %d places (needs exactly 1); the upstream file changed, "
+                                  "re-vet the patch" % (label, n, count))
         data = data.replace(old, new, 1)
     return data
 
@@ -468,6 +472,7 @@ def cmd_patch_dsh(args):
             sys.exit("target %s excludes changes to %s, but its sha256 %s is not the vetted original %s; use a fresh prefix" %
                      (args.target, rel, actual, expected))
     applied = []
+    skipped = []
     for name in names:
         diff = parsed[name]
         want = pins["patches"].get(name, {}).get(args.dsh_version)
@@ -476,26 +481,35 @@ def cmd_patch_dsh(args):
                      "  python3 -I runtime/lib/rtbuild.py patch-dsh --prefix <dsh-prefix> --dsh-version %s --target %s --record"
                      % (name, args.dsh_version, args.dsh_version, args.target))
         observed = {}
-        for rel, hunks in diff:
-            path = os.path.join(args.prefix, rel)
-            raw = open(path, "rb").read()
-            before = hashlib.sha256(raw).hexdigest()
-            pin = (want or {}).get(rel)
-            if not args.record:
-                if pin is None:
-                    sys.exit("%s: no pin for %s" % (name, rel))
-                if before in later[name][rel]:
-                    print("%s: %s already patched" % (name, rel))
-                    observed[rel] = pin
-                    continue
-                if before != pin["before"]:
-                    sys.exit("%s: %s sha256 %s differs from the vetted DSH %s original %s"
-                             % (name, rel, before, args.dsh_version, pin["before"]))
-            out = apply_hunks(raw.decode("utf-8"), hunks, "%s %s" % (name, rel)).encode("utf-8")
-            after = hashlib.sha256(out).hexdigest()
-            if not args.record and after != pin["after"]:
-                sys.exit("%s: %s patched sha256 %s != pinned %s" % (name, rel, after, pin["after"]))
-            mode = os.stat(path).st_mode & 0o777
+        writes = []          # (rel, path, bytes, mode, before, after) — written only once the whole diff fits
+        try:
+            for rel, hunks in diff:
+                path = os.path.join(args.prefix, rel)
+                raw = open(path, "rb").read()
+                before = hashlib.sha256(raw).hexdigest()
+                pin = (want or {}).get(rel)
+                if not args.record:
+                    if pin is None:
+                        sys.exit("%s: no pin for %s" % (name, rel))
+                    if before in later[name][rel]:
+                        print("%s: %s already patched" % (name, rel))
+                        observed[rel] = pin
+                        continue
+                    if before != pin["before"]:
+                        raise PatchUnsuitable("%s: %s sha256 %s differs from the vetted DSH %s original %s"
+                                              % (name, rel, before, args.dsh_version, pin["before"]))
+                out = apply_hunks(raw.decode("utf-8"), hunks, "%s %s" % (name, rel)).encode("utf-8")
+                after = hashlib.sha256(out).hexdigest()
+                if not args.record and after != pin["after"]:
+                    raise PatchUnsuitable("%s: %s patched sha256 %s != pinned %s" % (name, rel, after, pin["after"]))
+                writes.append((rel, path, out, os.stat(path).st_mode & 0o777, before, after))
+        except PatchUnsuitable as exc:
+            if args.lenient:
+                print("%s: SKIPPED for DSH %s — %s" % (name, args.dsh_version, exc))
+                skipped.append(name)
+                continue
+            sys.exit(str(exc))
+        for rel, path, out, mode, before, after in writes:
             tmp = path + ".dsh-app-patch"
             with open(tmp, "wb") as f:
                 f.write(out)
@@ -521,6 +535,8 @@ def cmd_patch_dsh(args):
             dst.write(src.read())
         os.chmod(tmp, 0o644)
         os.replace(tmp, target)
+    if skipped:
+        print("SKIPPED PATCHES for DSH %s: %s" % (args.dsh_version, ", ".join(skipped)))
     if args.out:
         with open(args.out, "w") as f:
             json.dump(applied, f)
@@ -1856,6 +1872,8 @@ def main():
                    help="required target patch set; no default (also required with --record)")
     p.add_argument("--patches", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "patches"))
     p.add_argument("--record", action="store_true", help="write the observed hashes as this version's pins")
+    p.add_argument("--lenient", action="store_true",
+                   help="skip (and report) patches whose hunks no longer match, instead of failing")
     p.add_argument("--out", help="write the applied patch names (JSON list) here")
     p.add_argument("--target-report", help="write target, selected, and excluded patch sets as JSON")
     p.set_defaults(fn=cmd_patch_dsh)
