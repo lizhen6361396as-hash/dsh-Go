@@ -485,6 +485,9 @@ def cmd_patch_dsh(args):
         try:
             for rel, hunks in diff:
                 path = os.path.join(args.prefix, rel)
+                if not os.path.isfile(path):
+                    raise PatchUnsuitable("%s: %s is not present in DSH %s (package removed or renamed upstream)"
+                                          % (name, rel, args.dsh_version))
                 raw = open(path, "rb").read()
                 before = hashlib.sha256(raw).hexdigest()
                 pin = (want or {}).get(rel)
