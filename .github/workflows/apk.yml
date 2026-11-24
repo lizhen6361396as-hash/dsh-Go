@@ -7,9 +7,19 @@ name: APK
 
 on:
   workflow_dispatch:
+    inputs:
+      runtime_run_id:
+        description: 'Runtime 工作流的 run id（内置 rc.5 引擎产物）；留空则退回官方包运行时'
+        required: false
+        default: ''
+      dsh_version:
+        description: '仅用于命名/记录的内置引擎版本'
+        required: false
+        default: '0.2.2-rc.5'
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   apk:
@@ -62,7 +72,29 @@ jobs:
       # 本机引擎的 Linux 运行时是 runtime/build-runtime.sh 的产物，不进仓库；
       # 这里从同版本官方包里取出（assets/runtime + proot/tawcroot 相关 .so），
       # 否则编出来的 APK 只有 70MB、没有本机引擎。
+      # 用了 Runtime 工作流的产物（内置 rc.5 引擎）时走这里；否则退回官方包里的运行时
+      - name: 取用云端构建的运行时（rc.5 引擎）
+        if: inputs.runtime_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ inputs.runtime_run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            | python3 -c "import sys,json;\nd=json.load(sys.stdin);\nprint(next(a['archive_download_url'] for a in d['artifacts'] if a['name']=='runtime-arm64-v8a'))")
+          echo "artifact: $url"
+          curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -o /tmp/runtime.zip "$url"
+          rm -rf /tmp/runtime && mkdir -p /tmp/runtime
+          unzip -q /tmp/runtime.zip -d /tmp/runtime
+          mkdir -p runtime/out/arm64-v8a
+          cp -a /tmp/runtime/. runtime/out/arm64-v8a/
+          python3 -c "import json,sys;m=json.load(open('runtime/out/arm64-v8a/assets/runtime/manifest.json'));print('bundled engine:',m.get('dshVersion'),'| runtime:',m.get('runtimeVersion'));sys.exit(0 if m.get('dshVersion')=='0.2.2-rc.5' else 1)"
+          du -sh runtime/out/arm64-v8a
+
       - name: 取出官方运行时
+        if: inputs.runtime_run_id == ''
         run: |
           set -euo pipefail
           curl -fL --retry 3 -o /tmp/official.apk "$OFFICIAL_APK_URL"
@@ -84,6 +116,21 @@ jobs:
             echo "::warning::官方包里没有 libtawcroot.so，tawcroot 启动方式将显示为不可用"
           fi
           du -sh runtime/out/arm64-v8a/assets/runtime runtime/out/arm64-v8a/jniLibs/arm64-v8a runtime/out-tawcroot
+
+      # rc.5 产物里没有 tawcroot 的 .so（它随官方包发布），单独从 1.3.0 官方包里取这一个文件
+      - name: 取 tawcroot 启动库
+        if: inputs.runtime_run_id != ''
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/official.apk "$OFFICIAL_APK_URL"
+          mkdir -p /tmp/taw
+          unzip -q /tmp/official.apk -d /tmp/taw 'lib/arm64-v8a/libtawcroot.so' || true
+          mkdir -p runtime/out-tawcroot/jniLibs/arm64-v8a
+          if [ -f /tmp/taw/lib/arm64-v8a/libtawcroot.so ]; then
+            cp -a /tmp/taw/lib/arm64-v8a/libtawcroot.so runtime/out-tawcroot/jniLibs/arm64-v8a/
+          else
+            echo "::warning::官方包里没有 libtawcroot.so，tawcroot 启动方式将显示为不可用"
+          fi
 
       - name: 编译
         working-directory: app

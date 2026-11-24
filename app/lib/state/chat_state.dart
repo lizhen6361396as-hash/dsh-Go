@@ -489,6 +489,12 @@ class ChatController extends Notifier<ChatState> {
   final _claimedAt = <String, int>{};
   final _retryingFailed = <String>{};
 
+  /// An interjection whose splice the Host canceled never reached the model
+  /// (the turn it joined ended first). It goes again as a queued prompt once;
+  /// a second cancellation leaves the failed-submission card instead of
+  /// looping.
+  final _requeued = <String>{};
+
   /// Sends still waiting for the Host to answer the prompt RPC. A prompt
   /// here may well have landed; anything else with no inbox slot after a
   /// fresh baseline did not.
@@ -853,11 +859,25 @@ class ChatController extends Notifier<ChatState> {
             if (_awayLong && !_quiet && _transcript.running) scheduleMicrotask(_quietIfRunning);
             if (reconcile) {
               final removed = before.difference(_inboxIds());
+              final requeue = <PendingPrompt>[];
               if (event is InboxSplicedEvent && !event.canceled) {
                 for (final prompt in _pending) {
                   if (removed.contains(prompt.requestId)) _claimedAt[prompt.requestId] = event.seq;
                 }
               } else if (event is! SessionSnapshotEvent) {
+                // A canceled splice drops what was waiting. When that is the
+                // person's own interjection it never reached the model, so it
+                // goes again as a queued prompt (next turn) instead of
+                // vanishing from the chat.
+                if (event is InboxSplicedEvent) {
+                  for (final prompt in _pending) {
+                    if (!removed.contains(prompt.requestId)) continue;
+                    if (prompt.isAutomatic || !prompt.resendable) continue;
+                    if (!_requeued.add(prompt.requestId)) continue;
+                    requeue.add(prompt);
+                    removed.remove(prompt.requestId);
+                  }
+                }
                 _withdrawn.addAll(removed);
               }
               // A restored claim is waiting again, not a failed submission.
@@ -874,6 +894,7 @@ class ChatController extends Notifier<ChatState> {
                   else
                     prompt,
               ]);
+              if (requeue.isNotEmpty) scheduleMicrotask(() => _requeueCanceled(requeue));
             }
             // A plugin may deliberately consume input without a user echo.
             // Only failed/cancelled claims need the older-Host recovery card.
@@ -977,6 +998,44 @@ class ChatController extends Notifier<ChatState> {
         positions[id] = (target: event.target, index: event.start + i);
         _claimedAt.remove(id);
         _withdrawn.remove(id);
+      }
+    }
+  }
+
+  /// A canceled interjection goes again as a queued prompt: that turn ended
+  /// before it read the message, and a queued one survives the turn that
+  /// dropped it (it starts, or joins, the next turn). One retry per prompt; a
+  /// second cancellation leaves the failed-submission card instead of looping,
+  /// and so does a Host that refuses the resend.
+  Future<void> _requeueCanceled(List<PendingPrompt> prompts) async {
+    for (final prompt in prompts) {
+      final client = _client;
+      if (!ref.mounted || client == null || !_canControl) return;
+      final current = _pending.where((p) => p.requestId == prompt.requestId).firstOrNull;
+      // Echoed, claimed or settled meanwhile: nothing to put back.
+      if (current == null) continue;
+      final queued = current.withMode(SendMode.queue).placed(null, null);
+      _pending = List.unmodifiable([
+        for (final p in _pending) p.requestId == prompt.requestId ? queued : p,
+      ]);
+      state = state.copyWith(pending: _placePending());
+      final operation = _ChatOperation(ref, client, _syncScope);
+      try {
+        await _deliver(
+          operation,
+          queued.text,
+          queued.attachments,
+          await _stageFiles(operation, queued.attachments),
+          requestId: queued.requestId,
+          mode: PromptMode.queue,
+        );
+      } catch (e) {
+        if (!ref.mounted || !identical(_client, client)) return;
+        _pending = List.unmodifiable([
+          for (final p in _pending)
+            p.requestId == queued.requestId ? p.failedAt(_transcript.cursor) : p,
+        ]);
+        state = state.copyWith(pending: _placePending(), error: _sendFailure(e));
       }
     }
   }

@@ -10,6 +10,15 @@ name: Runtime
 
 on:
   workflow_dispatch:
+    inputs:
+      dsh_version:
+        description: 'DSH engine version to bundle (default 0.2.2-rc.5 = r5)'
+        required: false
+        default: '0.2.2-rc.5'
+      patch_record:
+        description: 'Record pins for an unvetted engine version'
+        required: false
+        default: '1'
   pull_request:
     branches: [main]
     paths: ['.github/workflows/runtime.yml']
@@ -23,6 +32,9 @@ concurrency:
 
 jobs:
   build:
+    env:
+      DSH_VERSION: ${{ inputs.dsh_version || '0.2.2-rc.5' }}
+      DSH_PATCH_RECORD: ${{ inputs.patch_record || '1' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 45
