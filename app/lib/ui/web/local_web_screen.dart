@@ -24,10 +24,18 @@ import 'web_view_page.dart';
 Uri localWebUri(String baseUrl, String token) =>
     Uri.parse(baseUrl).replace(path: '/', queryParameters: {'token': token});
 
+/// `http://127.0.0.1:3080/pcremote/?token=…` — 电脑端: the phone's shell, the PC's data (the
+/// dsh-pc-proxy reverse proxy on the engine, fed through the SSH tunnel).
+Uri pcRemoteUri(String baseUrl, String token) =>
+    Uri.parse(baseUrl).replace(path: '/pcremote/', queryParameters: {'token': token});
+
 /// The official DSH Web UI served by the local engine: the fallback for anything
 /// the native UI doesn't do yet (plugins, advanced settings…).
 class LocalWebScreen extends ConsumerWidget {
-  const LocalWebScreen({super.key, this.target, this.handle, this.link, this.onSession});
+  const LocalWebScreen({super.key, this.target, this.handle, this.link, this.onSession, this.pcRemote = false});
+
+  /// 电脑端: the same Web UI, but its data comes from the PC (the `dsh-pc-proxy` reverse proxy).
+  final bool pcRemote;
 
   /// Page to land on (a session, a panel, a settings section…).
   final DshWebTarget? target;
@@ -48,10 +56,10 @@ class LocalWebScreen extends ConsumerWidget {
       return WebViewPage(
         // A restart issues a new token, and the layout switch applies on
         // load: rebuild the WebView for either.
-        key: ValueKey((status.token, phoneLayout)),
-        url: localWebUri(status.baseUrl!, status.token!),
-        title: context.l10n.webTitle,
-        subtitle: context.l10n.commonThisPhone,
+        key: ValueKey((status.token, phoneLayout, pcRemote)),
+        url: pcRemote ? pcRemoteUri(status.baseUrl!, status.token!) : localWebUri(status.baseUrl!, status.token!),
+        title: pcRemote ? '电脑端' : context.l10n.webTitle,
+        subtitle: pcRemote ? '数据走电脑' : context.l10n.commonThisPhone,
         externalDisabledReason: context.l10n.webLocalAppOnly,
         dshWeb: true,
         phoneLayout: phoneLayout,

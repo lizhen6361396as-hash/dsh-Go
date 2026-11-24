@@ -48,6 +48,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import io.github.ccch1mneyyy.dsh_app.MainActivity
 import io.github.ccch1mneyyy.dsh_app.R
+import io.github.ccch1mneyyy.dsh_app.freeze.Freeze
 import io.github.ccch1mneyyy.dsh_app.nativemedia.MicArbiter
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
 import io.github.ccch1mneyyy.dsh_app.phone.a11y.PhoneA11yService
@@ -309,7 +310,8 @@ internal object PetOverlay {
 
     fun setEnabled(on: Boolean): Map<String, Any?> {
         if (!on) capture.invalidate()
-        machine.enabled = on
+        // 冻结期间不接受“打开宠物”，等回到 App 解冻后再按需恢复。
+        machine.enabled = on && !Freeze.isFrozen(app)
         prefs.edit().putBoolean(K_ENABLED, on).apply()
         if (on) {
             failedIds.clear()
@@ -384,6 +386,15 @@ internal object PetOverlay {
 
     fun evaluate() {
         if (!initialized) return
+        // 一键冻结之后宠物不许自己回来：冻结标记在重新打开 App 前一直有效。
+        if (Freeze.isFrozen(app)) {
+            stopLoop()
+            stopCompanion()
+            removeWindows()
+            speaksForResults = false
+            publishStatus()
+            return
+        }
         main.removeCallbacks(evaluateRunnable)
         if (capture.inFlight) {
             // Keep the invisible PET ticket for openIntent's authenticated generation, but never
@@ -497,7 +508,7 @@ internal object PetOverlay {
                         geometry.width / 2 + 1, geometry.height / 2 + 1)
                     val previous = WindowPos(p.x, p.y)
                     val wanted = CompanionFloatGeometry.move(previous, before, next)
-                    val pos = if (dragging) EdgeSnap.clampDrag(wanted.x, wanted.y, next.width, next.height, safeArea()) else wanted
+                    val pos = EdgeSnap.clampDrag(wanted.x, wanted.y, next.width, next.height, safeArea())
                     val dx = pos.x - previous.x
                     val dy = pos.y - previous.y
                     dragStart = dragStart?.let { WindowPos(it.x + dx, it.y + dy) }
@@ -530,7 +541,7 @@ internal object PetOverlay {
             // 12+ treating this invisible application overlay as an occluder.
             p.alpha = 0f
             p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-            placeRest(v, p, EdgeSnap.position(dock, v.reach, area, edge(v.context)))
+            placeRest(v, p, EdgeSnap.position(dock, v.restBoxOnly(), area, edge(v.context)))
             update(v, p)
             renderer.state(machine.last?.state ?: PetPack.IDLE, machine.last?.reduceMotion == true)
             renderer.freeze(dimmed)
@@ -556,7 +567,7 @@ internal object PetOverlay {
         p.alpha = 1f
         p.flags = p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         p.width = v.frame.width; p.height = v.frame.height
-        placeRest(v, p, EdgeSnap.position(dock, v.reach, safeArea(), edge(v.context)))
+        placeRest(v, p, EdgeSnap.position(dock, v.restBoxOnly(), safeArea(), edge(v.context)))
         update(v, p)
         retarget()
         drawStill()
@@ -626,8 +637,10 @@ internal object PetOverlay {
         loadingKey = key
         val request = ++loadRequest
         val density = app.resources.displayMetrics.density
+        // 不许出屏: the screen at load time, so a 自定义 size bigger than the phone is cut down to it.
+        val area = safeArea()
         worker.execute {
-            val l = sprites.load(id, worker) { pack -> pack.screenScale(size, density) }
+            val l = sprites.load(id, worker) { pack -> fitScale(pack, pack.screenScale(size, density), area) }
             l?.warmResident()
             main.post {
                 if (request != loadRequest || loadingKey != key || packKey(machine.last) != key) {
@@ -778,10 +791,58 @@ internal object PetOverlay {
     /** Where the rest frame sits now: the window, less how far its frame reaches past rest. */
     private fun restPos(v: PetView, p: WindowManager.LayoutParams) = PetFrames.restOf(WindowPos(p.x, p.y), v.frame)
 
+    /**
+     * 按记住的停靠位置重新摆一次，不看现在的窗口参数——重启后旧参数可能是在旧屏幕/旧尺寸下算的，
+     * 一路沿用就会停在屏幕外。启动后隔几帧各调一次，等包和尺寸都就绪。
+     */
+    private fun reDock() {
+        val v = petView ?: return
+        val p = petParams ?: return
+        if (v.companionGeometry != null) return
+        val pos = EdgeSnap.position(dock, v.restBoxOnly(), safeArea(), edge(v.context))
+        placeRest(v, p, pos)
+        update(v, p)
+    }
+
+    /** 启动/换尺寸后多补几次位置：进程刚起来时帧和屏幕尺寸都可能还没就绪。 */
+    private fun scheduleRedock() {
+        for (delay in longArrayOf(300L, 1_000L, 2_500L)) {
+            main.postDelayed({ if (alive(petTicket)) reDock() }, delay)
+        }
+    }
+
+    /**
+     * 系统的“应用显示比例 / 兼容模式”会把这个 App 缩到比屏幕小的坐标空间（这台是 1080 宽、屏幕 1272 宽）。
+     * 悬浮窗的坐标是按 App 自己的空间放的，所以边界也要按 App 空间算，否则窗口右边缘会落到屏幕外被切掉。
+     */
+    private fun inAppSpace(real: SafeArea): SafeArea {
+        val dm = app.resources.displayMetrics
+        val aw = dm.widthPixels
+        val ah = dm.heightPixels
+        if (aw <= 0 || ah <= 0 || aw >= real.screenW) return real
+        val kx = aw.toFloat() / real.screenW
+        val ky = ah.toFloat() / real.screenH
+        return SafeArea(
+            aw, ah,
+            (real.left * kx).roundToInt(), (real.top * ky).roundToInt(),
+            (real.right * kx).roundToInt(), (real.bottom * ky).roundToInt(),
+        )
+    }
+
+    private fun petArea(): SafeArea = safeArea().let {
+        val m = if (::app.isInitialized) edge(app) else 20
+        SafeArea(it.screenW, it.screenH, it.left + m, it.top, it.right + m, it.bottom)
+    }
+
     private fun placeRest(v: PetView, p: WindowManager.LayoutParams, rest: WindowPos) {
         val at = PetFrames.windowAt(rest, v.frame)
-        p.x = at.x
-        p.y = at.y
+        // 刚启动时帧可能还没算出来（0×0），那时候按 reach 兜底，否则夹不住、会停在屏幕外。
+        val w = if (v.frame.width > 0) v.frame.width else v.reach.width
+        val h = if (v.frame.height > 0) v.frame.height else v.reach.height
+        // 一开始就得在屏幕里：换过分辨率/字号、或者上次记住的位置在旧屏幕上，都不许停到屏幕外。
+        val safe = EdgeSnap.clampDrag(at.x, at.y, w, h, petArea())
+        p.x = safe.x
+        p.y = safe.y
     }
 
     /**
@@ -798,14 +859,16 @@ internal object PetOverlay {
         val p = petParams ?: return
         val l = loaded ?: return
         if (!alive(petTicket)) return
-        val next = l.frames.frameFor(v.shown, dragging)
+        // 窗口必须装得下正在画的那一帧：只按“静止帧”给大小，边上会被窗口自己裁掉（看起来像跑出屏幕）。
+        val next = l.frames.frameFor(v.shown, dragging).union(v.artFrame() ?: l.frames.art(v.shown))
         if (next == v.frame) return
         val rest = restPos(v, p)
         v.setFrame(next)
         p.width = next.width
         p.height = next.height
         placeRest(v, p, rest)
-        if (dragging) EdgeSnap.clampDrag(p.x, p.y, p.width, p.height, safeArea()).let { p.x = it.x; p.y = it.y }
+        // 不管何时都要在屏幕内: a frame that grew past the dock (a jump, a thought cloud) is kept whole.
+        EdgeSnap.clampDrag(p.x, p.y, p.width, p.height, petArea()).let { p.x = it.x; p.y = it.y }
         update(v, p)
     }
 
@@ -849,8 +912,15 @@ internal object PetOverlay {
 
     private fun edge(ctx: Context) = ctx.dp(EDGE_DP)
 
+    /**
+     * 停靠时只按静止帧算，宠物才真的贴边；动画临时撑大的帧由 [fitFrame] 自己夹回屏幕内，
+     * 不让它把静止位置整体往里推（那会留出一条很宽的缝）。
+     */
+    private fun PetView.restBoxOnly(): FramePx = frame
+
     /** The pet window, on the right host; false when it couldn't be added. */
     private fun attachPet(): Boolean {
+        if (Freeze.isFrozen(app)) return false
         val want = overlayHost()
         if (want == OverlayHost.NONE) return false
         val service = PhoneA11yService.instance
@@ -874,7 +944,7 @@ internal object PetOverlay {
             view.contentDescription = loaded?.pack?.name ?: AppStrings.get(app, R.string.pet_label)
             dimmed = false
             systemShown = true
-            val pos = EdgeSnap.position(dock, view.reach, safeArea(), edge(ctx))
+            val pos = EdgeSnap.position(dock, view.restBoxOnly(), safeArea(), edge(ctx))
             val hardware = if (companionEndpoint != null && !companionRecovery.fallback)
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED else 0
             val params = baseParams(view.pixelWidth, view.pixelHeight, hardware).apply { x = pos.x; y = pos.y }
@@ -887,6 +957,7 @@ internal object PetOverlay {
                 return false
             }
             if (want == OverlayHost.APPLICATION) lastAdd = AddResult.OK
+            scheduleRedock()
             if (companionEndpoint == null || companionRecovery.fallback) enter(view)
             drawStill()
             true
@@ -1042,12 +1113,33 @@ internal object PetOverlay {
     }
 
     /** The screen minus status / navigation bars and the cutout. */
+    /**
+     * 宠物不许出屏: [pack]'s scale, cut down when the picture it may show would not fit the screen —
+     * a 自定义 size can ask for a pet wider or taller than the phone. The pet shrinks whole instead
+     * of hanging off an edge; when it fits already, the size is exactly what was asked for.
+     */
+    private fun fitScale(pack: PetPack, scale: Float, area: SafeArea): Float {
+        if (scale <= 0f) return scale
+        return runCatching {
+            val roomW = (area.screenW - area.left - area.right).toFloat()
+            val roomH = (area.screenH - area.top - area.bottom).toFloat()
+            if (roomW <= 0f || roomH <= 0f) return@runCatching scale
+            val box = pack.windowBox()
+            if (box.w <= 0f || box.h <= 0f) return@runCatching scale
+            val fit = minOf(roomW * 0.92f / box.w, roomH * 0.85f / box.h)
+            // 只有大得离谱时才缩，而且至少留一半，绝不把宠物缩没了
+            val capped = maxOf(fit, scale * 0.5f).coerceAtLeast(1f)
+            minOf(scale, capped)
+        }.getOrDefault(scale)
+    }
+
     private fun safeArea(): SafeArea {
         val w = wm ?: appWindowContext().getSystemService(WindowManager::class.java)
         if (Build.VERSION.SDK_INT >= 30) {
             val m = w.currentWindowMetrics
             val i = m.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            return SafeArea(m.bounds.width(), m.bounds.height(), i.left, i.top, i.right, i.bottom)
+            val real = SafeArea(m.bounds.width(), m.bounds.height(), i.left, i.top, i.right, i.bottom)
+            return inAppSpace(real)
         }
         val dm = DisplayMetrics()
         @Suppress("DEPRECATION")
@@ -1126,7 +1218,7 @@ internal object PetOverlay {
             val drop = dropAt ?: restPos(v, p)
             dock = EdgeSnap.dockFor(drop, v.pixelWidth, v.reach, area, edge(v.context), velocityX)
             prefs.edit().putString(K_SIDE, if (dock.side == Side.LEFT) "left" else "right").putFloat(K_Y, dock.yFraction).apply()
-            slide(v, p, EdgeSnap.position(dock, v.reach, area, edge(v.context))) { evaluate() }
+            slide(v, p, EdgeSnap.position(dock, v.restBoxOnly(), area, edge(v.context))) { evaluate() }
         }
 
         override fun onDragCancel() {
@@ -1137,7 +1229,7 @@ internal object PetOverlay {
             redraw()
             val v = petView ?: return
             val p = petParams ?: return
-            slide(v, p, EdgeSnap.position(dock, v.reach, safeArea(), edge(v.context))) { evaluate() }
+            slide(v, p, EdgeSnap.position(dock, v.restBoxOnly(), safeArea(), edge(v.context))) { evaluate() }
         }
 
         override fun onPoke(leftHalf: Boolean, x: Float, y: Float) {
@@ -1716,7 +1808,7 @@ internal object PetOverlay {
         val gap = ctx.dp(8f)
         val margin = edge(ctx)
         val at = if (pv.companionGeometry != null) petParams?.let { restPos(pv, it) } ?: return
-            else EdgeSnap.position(dock, pv.reach, area, margin)
+            else EdgeSnap.position(dock, pv.restBoxOnly(), area, margin)
         val body = f.body.at(at)
         val pet = ScreenRect(at.x + pv.reach.left, body.top, at.x + pv.reach.right, body.bottom)
         val w = AskPlace.width(pet, dock.side, area, gap, margin, ctx.dp(ASK_MIN_DP), ctx.dp(ASK_MAX_DP))
