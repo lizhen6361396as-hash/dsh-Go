@@ -588,12 +588,22 @@ internal object PetOverlay {
 
     // ---- permission -----------------------------------------------------------------------------
 
+    // 伙伴悬浮（1.4.x 的「小屋里的她」）在定制版宠物层里暂不可用：插件调用按“没显示”处理，
+    // 像素宠物照常工作。伙伴小屋本身是 Flutter 层，不受影响。
+    fun companionMode(enabled: Boolean, name: String?) {}
+
+    fun companionLine(id: String?, text: String?, emotion: String?, speaking: Boolean): Boolean = false
+
+    fun companionSpeech(id: String?, chars: Int, speaking: Boolean) {}
+
+    fun clearCompanion() {}
+
     private fun a11yConnected() = PhoneA11yService.instance != null
 
     private fun overlayHost(): OverlayHost = OverlayAccess.host(
         a11yConnected(), lastAdd,
         a11yFailed = accessibilityRetry.remaining(PhoneA11yService.instance, now()) != null,
-        canDraw = canDraw(),
+        canDraw = { canDraw() },
     )
 
     private fun canDraw(): Boolean = try { Settings.canDrawOverlays(app) } catch (_: Exception) { false }
@@ -1628,6 +1638,7 @@ internal object PetOverlay {
         PetMenuItem.SWITCH_HOST -> R.string.pet_switch_host
         PetMenuItem.SNOOZE -> R.string.pet_snooze
         PetMenuItem.SETTINGS -> R.string.pet_settings
+        else -> R.string.pet_settings
     })
 
     private fun wheelLabel(item: PetMenuItem): String = AppStrings.get(app, when (item) {
@@ -1638,6 +1649,7 @@ internal object PetOverlay {
         PetMenuItem.SWITCH_HOST -> R.string.pet_wheel_hosts
         PetMenuItem.SNOOZE -> R.string.pet_wheel_snooze
         PetMenuItem.SETTINGS -> R.string.pet_wheel_settings
+        else -> R.string.pet_wheel_settings
     })
 
     private fun onMenu(item: PetMenuItem, ticket: OverlayWindowOwner.Ticket, target: PetPush?) {
@@ -1663,6 +1675,7 @@ internal object PetOverlay {
                 open(null, null, null)
                 if (started > 0) deliverSettings()
             }
+            else -> {}
         }
     }
 
