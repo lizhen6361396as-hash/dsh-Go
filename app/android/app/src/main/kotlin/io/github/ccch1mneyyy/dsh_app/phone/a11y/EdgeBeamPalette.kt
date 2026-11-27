@@ -4,6 +4,7 @@ import android.graphics.Color
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 // 屏幕四边炫光（EdgeBeam）已按补丁删除；这里只留 OverlayLook 取色用的调色板。
 internal object EdgeBeamPalette {
