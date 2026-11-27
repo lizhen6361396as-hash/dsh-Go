@@ -458,6 +458,8 @@ internal object BallGeometry {
     /** The window margin EdgeSnap keeps from the safe area so the ball itself is [edge] in. */
     fun margin(edge: Int, pad: Int) = edge - pad
 
+    fun centredX(screenW: Int, windowW: Int) = (screenW - windowW) / 2
+
     /** A ball on [side], level with a capsule centred at [centreY]: where one never moved rests (on the right), and where a capsule dragged off a side folds. */
     fun dockLevel(area: SafeArea, size: Int, margin: Int, centreY: Int, side: Side = Side.RIGHT): Dock {
         val lo = EdgeSnap.minY(area, margin)

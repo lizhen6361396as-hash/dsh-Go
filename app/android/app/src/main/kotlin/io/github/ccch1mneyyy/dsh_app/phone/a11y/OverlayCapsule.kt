@@ -39,6 +39,12 @@ import kotlin.math.roundToInt
 internal data class CapsuleState(
     /** The header's line: what DSH does now, or 已暂停 / 等你确认 / 已停止. */
     val line: String,
+    /** 悬浮屏（1.4.x）读的副行：定制版不给副行，留空。 */
+    val sub: String? = null,
+    /** 悬浮屏读的起始时刻（毫秒），0 表示不计时。 */
+    val startedAt: Long = 0L,
+    /** 悬浮屏左上角的应用图标；定制版不放图标。 */
+    val icon: android.graphics.drawable.Drawable? = null,
     val look: MarkLook,
     val paused: Boolean,
     val stopped: Boolean,
