@@ -20,6 +20,7 @@ import android.os.Looper
 import android.os.PowerManager
 import io.github.ccch1mneyyy.dsh_app.MainActivity
 import io.github.ccch1mneyyy.dsh_app.R
+import io.github.ccch1mneyyy.dsh_app.freeze.Freeze
 import io.github.ccch1mneyyy.dsh_app.phone.PhoneControl
 
 /** Foreground service that keeps the local DSH process alive in the background. */
@@ -38,6 +39,8 @@ class DshService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val controller = RuntimeController.get(this)
+        // 引擎一启动就解冻：不管是从 App 里、通知里还是别处拉起来的，宠物和后台通道都跟着回来。
+        if (intent?.action == ACTION_START || intent?.action == null) Freeze.thaw(this)
         when (intent?.action) {
             ACTION_INSTALL -> {
                 protection.detach(this)
@@ -97,6 +100,13 @@ class DshService : Service() {
                     if (live != null && !live.paused && control.background.previewTarget(taskId) == null) control.pauseTask(taskId, true)
                     control.reopen(control.taskSession(taskId), null)
                 }
+            }
+            ACTION_FREEZE -> {
+                // 一键冻结: engine, pet and phone control go quiet together; opening the app thaws.
+                Freeze.freeze(this)
+                running = false
+                stopForegroundCompat()
+                stopSelf()
             }
             ACTION_STOP -> {
                 if (controller.phase != RuntimeController.Phase.INSTALLING) {
@@ -217,6 +227,7 @@ class DshService : Service() {
         const val ACTION_START = "io.github.ccch1mneyyy.dsh_app.START"
         const val ACTION_STOP = "io.github.ccch1mneyyy.dsh_app.STOP"
         const val ACTION_PHONE_STOP = "io.github.ccch1mneyyy.dsh_app.PHONE_STOP"
+        const val ACTION_FREEZE = "io.github.ccch1mneyyy.dsh_app.FREEZE"
         const val ACTION_PHONE_PAUSE = "io.github.ccch1mneyyy.dsh_app.PHONE_PAUSE"
         const val ACTION_PHONE_BACK = "io.github.ccch1mneyyy.dsh_app.PHONE_BACK"
         private const val PHONE_TASK_SCHEME = "dsh-phone-task"
@@ -366,6 +377,10 @@ class DshService : Service() {
                 context, 0, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
+            val freeze = PendingIntent.getService(
+                context, 3, Intent(context, DshService::class.java).setAction(ACTION_FREEZE),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
             val stop = PendingIntent.getService(
                 context, 1, Intent(context, DshService::class.java).setAction(ACTION_STOP),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -397,6 +412,7 @@ class DshService : Service() {
                 .setContentText(phoneLine ?: voice ?: text)
                 .setOngoing(true)
                 .setContentIntent(open)
+                .addAction(Notification.Action.Builder(null, AppStrings.get(context, R.string.service_freeze), freeze).build())
                 .addAction(Notification.Action.Builder(null, AppStrings.get(context, R.string.service_stop), stop).build())
                 .build()
         }
