@@ -23,6 +23,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodChannel
 import io.github.ccch1mneyyy.dsh_app.companion.CompanionAssistant
+import io.github.ccch1mneyyy.dsh_app.freeze.Freeze
 import io.github.ccch1mneyyy.dsh_app.launch.LaunchScreen
 import io.github.ccch1mneyyy.dsh_app.launch.LaunchThemeSync
 import io.github.ccch1mneyyy.dsh_app.remote.RemoteBackgroundService
@@ -59,6 +60,8 @@ class MainActivity : FlutterActivity() {
         packageManager.getActivityInfo(ComponentName(this, MainActivity::class.java), PackageManager.GET_META_DATA).metaData
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 一键冻结 ends here: the person is back in the app, so the engine / pet may come back.
+        Freeze.clear(this)
         // 「打开 App 时自动启动」: DSH boots while Flutter starts, not after its first frame.
         LaunchStart.onActivityCreate(this)
         // 启动画面: the first activity of a cold start hands the system's launch window to Dart's.
@@ -240,6 +243,8 @@ class MainActivity : FlutterActivity() {
                     applyRefreshRate()
                     result.success(null)
                 }
+                // 抽屉里的一键冻结: engine, pet and phone control stop together.
+                "freezeAll" -> result.success(Freeze.freeze(applicationContext))
                 "bringToFront" -> {
                     startActivity(
                         Intent(this, MainActivity::class.java)

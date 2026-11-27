@@ -36,6 +36,7 @@ import '../share_code/profile_share_sheet.dart';
 import '../shell/session_search_page.dart';
 import '../terminal/terminal_page.dart';
 import '../theme/app_icons.dart';
+import '../web/local_web_screen.dart';
 import '../web/web_target.dart';
 import '../workspace/workspaces_page.dart';
 import 'feature_widgets.dart' show openSessionInChat;
@@ -380,6 +381,15 @@ final featureSections = <FeatureSection>[
       summary: (l10n) => l10n.catalogWebSummary,
       icon: AppIcons.webApp,
       web: const DshWebTarget(),
+    ),
+    // 电脑端: the phone's shell with the PC's data, through the reverse proxy the
+    // dsh-pc-proxy plugin serves (the SSH tunnel has to be up).
+    FeatureItem.localized(
+      id: 'pc-remote',
+      title: (_) => '电脑端',
+      summary: (_) => '手机这套界面，数据走电脑',
+      icon: AppIcons.remoteHost,
+      native: (_) => const LocalWebScreen(pcRemote: true),
     ),
   ]),
   // The same pages as in 设置 (one home, one name), for people who look

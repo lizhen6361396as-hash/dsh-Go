@@ -1,0 +1,98 @@
+# 云编译 APK：手动触发，产出 arm64 的 release 包（独立安装版）。
+# 签名：仓库 Secrets 里放好 KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
+# 就按 release 签（能覆盖已安装的包）；没放则用 debug 签名（安装前要先卸载旧包）。
+# 独立包：DSH_SIDE_BUILD=1 → applicationId …dsh_app.test、名称「DSH-贰号机」，
+# 和官方包并排安装、数据各自独立。
+name: APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      # 取自哪个官方包的运行时；跟着源码版本走，别混版本（当前基线 v1.4.1）
+      OFFICIAL_APK_URL: https://github.com/ccch1mneyyy/dsh-Go/releases/download/v1.4.1/dsh-go-1.4.1-arm64.apk
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.7"
+          channel: stable
+          cache: true
+
+      # Gradle 依赖与 wrapper：第二次起省 3–5 分钟
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('app/android/**/*.gradle*', 'app/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: 依赖
+        working-directory: app
+        run: flutter pub get
+
+      - name: 写入签名配置
+        if: env.KEYSTORE_BASE64 != ''
+        working-directory: app/android
+        env:
+          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/dshgo.keystore"
+          printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$RUNNER_TEMP/dshgo.keystore" "$STORE_PASS" "$KEY_ALIAS" "$KEY_PASS" > key.properties
+          chmod 600 key.properties
+
+      # 本机引擎的 Linux 运行时是 runtime/build-runtime.sh 的产物，不进仓库；
+      # 这里从同版本官方包里取出（assets/runtime + proot/tawcroot 相关 .so），
+      # 否则编出来的 APK 只有 70MB、没有本机引擎。
+      - name: 取出官方运行时
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/official.apk "$OFFICIAL_APK_URL"
+          unzip -q /tmp/official.apk -d /tmp/official \
+            'assets/runtime/*' \
+            'lib/arm64-v8a/libproot.so' \
+            'lib/arm64-v8a/libproot-loader.so' \
+            'lib/arm64-v8a/libtalloc.so' \
+            'lib/arm64-v8a/libandroid-shmem.so' \
+            'lib/arm64-v8a/libtawcroot.so'
+          mkdir -p runtime/out/arm64-v8a/assets runtime/out/arm64-v8a/jniLibs/arm64-v8a
+          cp -a /tmp/official/assets/runtime runtime/out/arm64-v8a/assets/
+          cp -a /tmp/official/lib/arm64-v8a/*.so runtime/out/arm64-v8a/jniLibs/arm64-v8a/
+          # 1.3.0 起引擎默认用 tawcroot 启动，它单独放在 runtime/out-tawcroot
+          mkdir -p runtime/out-tawcroot/jniLibs/arm64-v8a
+          if [ -f /tmp/official/lib/arm64-v8a/libtawcroot.so ]; then
+            cp -a /tmp/official/lib/arm64-v8a/libtawcroot.so runtime/out-tawcroot/jniLibs/arm64-v8a/
+          else
+            echo "::warning::官方包里没有 libtawcroot.so，tawcroot 启动方式将显示为不可用"
+          fi
+          du -sh runtime/out/arm64-v8a/assets/runtime runtime/out/arm64-v8a/jniLibs/arm64-v8a runtime/out-tawcroot
+
+      - name: 编译
+        working-directory: app
+        env:
+          DSH_SIDE_BUILD: "1"
+        run: flutter build apk --release --flavor arm64 --target-platform android-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-apk
+          if-no-files-found: error
+          path: app/build/app/outputs/flutter-apk/*.apk
